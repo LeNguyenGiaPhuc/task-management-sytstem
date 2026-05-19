@@ -1,0 +1,127 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model activity_logs {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  board_id    String    @db.Uuid
+  user_id     String?   @db.Uuid
+  action_text String
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  boards      boards    @relation(fields: [board_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users       users?    @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+
+  @@index([board_id, created_at(sort: Desc)], map: "idx_activity_logs_board")
+}
+
+model board_members {
+  board_id  String      @db.Uuid
+  user_id   String      @db.Uuid
+  role      board_role? @default(MEMBER)
+  joined_at DateTime?   @default(now()) @db.Timestamptz(6)
+  boards    boards      @relation(fields: [board_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users     users       @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([board_id, user_id])
+  @@index([user_id], map: "idx_board_members_user")
+}
+
+model boards {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title         String          @db.VarChar(255)
+  description   String?
+  background    String?
+  owner_id      String          @db.Uuid
+  created_at    DateTime?       @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime?       @default(now()) @db.Timestamptz(6)
+  activity_logs activity_logs[]
+  board_members board_members[]
+  users         users           @relation(fields: [owner_id], references: [id], onUpdate: NoAction)
+  columns       columns[]
+}
+
+model columns {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  board_id   String    @db.Uuid
+  title      String    @db.VarChar(255)
+  order      Float
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+  boards     boards    @relation(fields: [board_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tasks      tasks[]
+
+  @@index([board_id, order], map: "idx_columns_board_order")
+}
+
+model sub_tasks {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  task_id      String    @db.Uuid
+  title        String    @db.VarChar(255)
+  is_completed Boolean?  @default(false)
+  order        Int
+  created_at   DateTime? @default(now()) @db.Timestamptz(6)
+  tasks        tasks     @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([task_id], map: "idx_sub_tasks_task")
+}
+
+model task_attachments {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  task_id     String    @db.Uuid
+  file_name   String    @db.VarChar(255)
+  file_url    String
+  uploaded_by String?   @db.Uuid
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  tasks       tasks     @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users       users?    @relation(fields: [uploaded_by], references: [id], onUpdate: NoAction)
+}
+
+model tasks {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  column_id        String             @db.Uuid
+  title            String             @db.VarChar(255)
+  description      String?
+  priority         task_priority?     @default(MEDIUM)
+  assignee_id      String?            @db.Uuid
+  due_date         DateTime?          @db.Timestamptz(6)
+  order            Float
+  created_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  sub_tasks        sub_tasks[]
+  task_attachments task_attachments[]
+  users            users?             @relation(fields: [assignee_id], references: [id], onUpdate: NoAction)
+  columns          columns            @relation(fields: [column_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([column_id, order], map: "idx_tasks_column_order")
+}
+
+model users {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email            String             @unique @db.VarChar(255)
+  name             String             @db.VarChar(255)
+  avatar_url       String?
+  created_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  activity_logs    activity_logs[]
+  board_members    board_members[]
+  boards           boards[]
+  task_attachments task_attachments[]
+  tasks            tasks[]
+}
+
+enum board_role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum task_priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
