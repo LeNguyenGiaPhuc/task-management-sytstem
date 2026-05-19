@@ -741,8 +741,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
         <div className="mx-auto flex max-w-7xl flex-col gap-4">
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
             <div>
-              <Link href="/" className="text-sm font-medium text-slate-500 hover:text-slate-900">
-                Workspaces
+              <Link
+                href="/"
+                className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
+              >
+                ← Back to workspaces
               </Link>
               <h1 className="mt-1 text-2xl font-bold text-slate-950">{boardName}</h1>
               <p className="mt-1 text-sm text-slate-500">
