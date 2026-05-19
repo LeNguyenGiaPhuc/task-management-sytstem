@@ -1,4 +1,4 @@
-# Task Management - Jira/Kanban Clone
+# Task Management - Jira/Kanban Like
 
 A task management application based on the Kanban model, inspired by Jira/Trello. The project is built with a separated frontend and backend architecture, uses a PostgreSQL database, provides REST APIs, supports workspace/board management, task drag and drop, checklists, and includes sample data for demonstration.
 
