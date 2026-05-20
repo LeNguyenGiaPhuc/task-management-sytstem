@@ -1,9 +1,30 @@
 const express = require('express');
+const fs = require('fs');
+const multer = require('multer');
+const path = require('path');
 const prisma = require('../lib/prisma');
 const { logBoardActivity } = require('../services/activity.service');
+const { ensureTaskCommentsTable } = require('../services/comments.service');
+const { getDemoUserId } = require('../services/users.service');
 const { cleanText } = require('../utils/text');
 
 const router = express.Router();
+const uploadDirectory = path.join(__dirname, '..', 'uploads');
+
+fs.mkdirSync(uploadDirectory, { recursive: true });
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: uploadDirectory,
+    filename: (req, file, cb) => {
+      const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '-');
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}-${safeName}`);
+    },
+  }),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+});
 
 const taskInclude = {
   users: {
@@ -18,6 +39,19 @@ const taskInclude = {
     orderBy: { order: 'asc' },
   },
 };
+
+async function getTaskBoard(taskId) {
+  return prisma.tasks.findUnique({
+    where: { id: taskId },
+    include: {
+      columns: {
+        select: {
+          board_id: true,
+        },
+      },
+    },
+  });
+}
 
 router.get('/', async (req, res) => {
   try {
@@ -138,19 +172,232 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.get('/:id/comments', async (req, res) => {
   try {
     const { id } = req.params;
-    const task = await prisma.tasks.findUnique({
-      where: { id },
+    await ensureTaskCommentsTable();
+
+    const comments = await prisma.$queryRawUnsafe(
+      `
+        SELECT
+          task_comments.id,
+          task_comments.task_id,
+          task_comments.user_id,
+          task_comments.content,
+          task_comments.created_at,
+          task_comments.updated_at,
+          users.name AS user_name,
+          users.email AS user_email,
+          users.avatar_url AS user_avatar_url
+        FROM task_comments
+        LEFT JOIN users ON users.id = task_comments.user_id
+        WHERE task_comments.task_id = $1::uuid
+        ORDER BY task_comments.created_at DESC
+      `,
+      id
+    );
+
+    res.status(200).json(comments);
+  } catch (error) {
+    console.error('GET /api/tasks/:id/comments failed:', error);
+    res.status(500).json({ error: 'Server error while loading comments' });
+  }
+});
+
+router.post('/:id/comments', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { content, user_id } = req.body;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: 'Missing content' });
+    }
+
+    await ensureTaskCommentsTable();
+    const userId = user_id || await getDemoUserId();
+    const createdComments = await prisma.$queryRawUnsafe(
+      `
+        INSERT INTO task_comments (task_id, user_id, content)
+        VALUES ($1::uuid, $2::uuid, $3)
+        RETURNING id, task_id, user_id, content, created_at, updated_at
+      `,
+      id,
+      userId,
+      content.trim()
+    );
+    const comment = createdComments[0];
+    const task = await getTaskBoard(id);
+
+    if (task) {
+      await logBoardActivity(task.columns.board_id, `Commented on task ${task.title}`, userId);
+    }
+
+    const comments = await prisma.$queryRawUnsafe(
+      `
+        SELECT
+          task_comments.id,
+          task_comments.task_id,
+          task_comments.user_id,
+          task_comments.content,
+          task_comments.created_at,
+          task_comments.updated_at,
+          users.name AS user_name,
+          users.email AS user_email,
+          users.avatar_url AS user_avatar_url
+        FROM task_comments
+        LEFT JOIN users ON users.id = task_comments.user_id
+        WHERE task_comments.id = $1::uuid
+      `,
+      comment.id
+    );
+
+    res.status(201).json(comments[0]);
+  } catch (error) {
+    console.error('POST /api/tasks/:id/comments failed:', error);
+    res.status(500).json({ error: 'Server error while creating comment' });
+  }
+});
+
+router.delete('/:taskId/comments/:commentId', async (req, res) => {
+  try {
+    const { taskId, commentId } = req.params;
+    await ensureTaskCommentsTable();
+
+    const existingComments = await prisma.$queryRawUnsafe(
+      'SELECT id FROM task_comments WHERE id = $1::uuid AND task_id = $2::uuid',
+      commentId,
+      taskId
+    );
+
+    if (!existingComments.length) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
+
+    await prisma.$executeRawUnsafe(
+      'DELETE FROM task_comments WHERE id = $1::uuid AND task_id = $2::uuid',
+      commentId,
+      taskId
+    );
+
+    const task = await getTaskBoard(taskId);
+    if (task) {
+      await logBoardActivity(task.columns.board_id, `Deleted a comment from ${task.title}`);
+    }
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('DELETE /api/tasks/:taskId/comments/:commentId failed:', error);
+    res.status(500).json({ error: 'Server error while deleting comment' });
+  }
+});
+
+router.get('/:id/attachments', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const attachments = await prisma.task_attachments.findMany({
+      where: { task_id: id },
+      orderBy: { created_at: 'desc' },
       include: {
-        columns: {
+        users: {
           select: {
-            board_id: true,
+            id: true,
+            email: true,
+            name: true,
+            avatar_url: true,
           },
         },
       },
     });
+
+    res.status(200).json(attachments);
+  } catch (error) {
+    console.error('GET /api/tasks/:id/attachments failed:', error);
+    res.status(500).json({ error: 'Server error while loading attachments' });
+  }
+});
+
+router.post('/:id/attachments', upload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { file_name, file_url, uploaded_by } = req.body;
+    const uploadedFile = req.file;
+    const finalFileName = uploadedFile?.originalname || file_name;
+    const finalFileUrl = uploadedFile
+      ? `/uploads/${uploadedFile.filename}`
+      : file_url;
+
+    if (!finalFileName || !finalFileName.trim() || !finalFileUrl || !finalFileUrl.trim()) {
+      return res.status(400).json({ error: 'Missing attachment file or URL' });
+    }
+
+    const uploadedBy = uploaded_by || await getDemoUserId();
+    const attachment = await prisma.task_attachments.create({
+      data: {
+        task_id: id,
+        file_name: finalFileName.trim(),
+        file_url: finalFileUrl.trim(),
+        uploaded_by: uploadedBy,
+      },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            avatar_url: true,
+          },
+        },
+      },
+    });
+    const task = await getTaskBoard(id);
+
+    if (task) {
+      await logBoardActivity(task.columns.board_id, `Attached ${attachment.file_name} to ${task.title}`, uploadedBy);
+    }
+
+    res.status(201).json(attachment);
+  } catch (error) {
+    console.error('POST /api/tasks/:id/attachments failed:', error);
+    res.status(500).json({ error: 'Server error while creating attachment' });
+  }
+});
+
+router.delete('/:taskId/attachments/:attachmentId', async (req, res) => {
+  try {
+    const { taskId, attachmentId } = req.params;
+    const attachment = await prisma.task_attachments.findFirst({
+      where: {
+        id: attachmentId,
+        task_id: taskId,
+      },
+    });
+
+    if (!attachment) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+
+    await prisma.task_attachments.delete({ where: { id: attachmentId } });
+    if (attachment.file_url?.startsWith('/uploads/')) {
+      const localPath = path.join(__dirname, '..', attachment.file_url.replace(/^\//, ''));
+      fs.unlink(localPath, () => {});
+    }
+
+    const task = await getTaskBoard(taskId);
+    if (task) {
+      await logBoardActivity(task.columns.board_id, `Removed attachment ${attachment.file_name} from ${task.title}`);
+    }
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('DELETE /api/tasks/:taskId/attachments/:attachmentId failed:', error);
+    res.status(500).json({ error: 'Server error while deleting attachment' });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const task = await getTaskBoard(id);
 
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });

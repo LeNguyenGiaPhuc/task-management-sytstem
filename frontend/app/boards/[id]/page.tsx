@@ -30,6 +30,28 @@ type ActivityLog = {
   users?: Pick<User, "id" | "email" | "name" | "avatar_url"> | null;
 };
 
+type TaskComment = {
+  id: string;
+  task_id: string;
+  user_id?: string | null;
+  content: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  user_name?: string | null;
+  user_email?: string | null;
+  user_avatar_url?: string | null;
+};
+
+type TaskAttachment = {
+  id: string;
+  task_id: string;
+  file_name: string;
+  file_url: string;
+  uploaded_by?: string | null;
+  created_at?: string | null;
+  users?: User | null;
+};
+
 type SubTask = {
   id: string;
   title: string;
@@ -59,6 +81,8 @@ type Column = {
 
 type BoardData = {
   title: string;
+  description?: string | null;
+  background?: string | null;
   board_members?: BoardMember[];
   activity_logs?: ActivityLog[];
   columns?: Column[];
@@ -109,6 +133,40 @@ function getInitials(name: string) {
     .join("");
 }
 
+function getAttachmentHref(fileUrl: string) {
+  if (fileUrl.startsWith("/uploads/")) return `${API_BASE_URL}${fileUrl}`;
+  return fileUrl;
+}
+
+function getColorValue(value: string) {
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#f8fafc";
+}
+
+function hexToRgb(value: string) {
+  const color = getColorValue(value).replace("#", "");
+  return {
+    r: parseInt(color.slice(0, 2), 16),
+    g: parseInt(color.slice(2, 4), 16),
+    b: parseInt(color.slice(4, 6), 16),
+  };
+}
+
+function mixWithWhite(value: string, amount = 0.88) {
+  const { r, g, b } = hexToRgb(value);
+  const mix = (channel: number) => Math.round(channel + (255 - channel) * amount);
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
+
+function getBoardPageBackground(value: string) {
+  if (!value) return "#f1f5f9";
+  return mixWithWhite(value, 0.9);
+}
+
+function getBoardAccent(value: string) {
+  if (!value) return "#cbd5e1";
+  return mixWithWhite(value, 0.55);
+}
+
 function getColumnTaskCount(columns: Column[]) {
   return columns.reduce((total, column) => total + column.tasks.length, 0);
 }
@@ -123,6 +181,8 @@ function getPriorityClass(priority?: Priority | null) {
 function TaskDetailModal({
   task,
   members,
+  comments,
+  attachments,
   onClose,
   onSave,
   onDelete,
@@ -130,9 +190,15 @@ function TaskDetailModal({
   onCreateSubTask,
   onToggleSubTask,
   onDeleteSubTask,
+  onCreateComment,
+  onDeleteComment,
+  onCreateAttachment,
+  onDeleteAttachment,
 }: {
   task: Task;
   members: BoardMember[];
+  comments: TaskComment[];
+  attachments: TaskAttachment[];
   onClose: () => void;
   onSave: (values: TaskUpdate) => Promise<void>;
   onDelete: () => Promise<void>;
@@ -140,6 +206,10 @@ function TaskDetailModal({
   onCreateSubTask: (title: string) => Promise<void>;
   onToggleSubTask: (subTask: SubTask) => Promise<void>;
   onDeleteSubTask: (subTaskId: string) => Promise<void>;
+  onCreateComment: (content: string) => Promise<void>;
+  onDeleteComment: (commentId: string) => Promise<void>;
+  onCreateAttachment: (file: File) => Promise<void>;
+  onDeleteAttachment: (attachmentId: string) => Promise<void>;
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || "");
@@ -147,10 +217,14 @@ function TaskDetailModal({
   const [assigneeId, setAssigneeId] = useState(task.assignee_id || "");
   const [dueDate, setDueDate] = useState(toDateInputValue(task.due_date));
   const [subTaskTitle, setSubTaskTitle] = useState("");
+  const [commentContent, setCommentContent] = useState("");
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDuplicating, setIsDuplicating] = useState(false);
   const [isAddingSubTask, setIsAddingSubTask] = useState(false);
+  const [isAddingComment, setIsAddingComment] = useState(false);
+  const [isAddingAttachment, setIsAddingAttachment] = useState(false);
 
   const completedCount = (task.sub_tasks || []).filter((item) => item.is_completed).length;
 
@@ -183,6 +257,33 @@ function TaskDetailModal({
       setSubTaskTitle("");
     } finally {
       setIsAddingSubTask(false);
+    }
+  };
+
+  const handleCreateComment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const content = commentContent.trim();
+    if (!content) return;
+
+    setIsAddingComment(true);
+    try {
+      await onCreateComment(content);
+      setCommentContent("");
+    } finally {
+      setIsAddingComment(false);
+    }
+  };
+
+  const handleCreateAttachment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!attachmentFile) return;
+
+    setIsAddingAttachment(true);
+    try {
+      await onCreateAttachment(attachmentFile);
+      setAttachmentFile(null);
+    } finally {
+      setIsAddingAttachment(false);
     }
   };
 
@@ -368,6 +469,132 @@ function TaskDetailModal({
             </button>
           </form>
         </section>
+
+        <section className="mt-6 grid gap-5 border-t border-slate-200 pt-5 md:grid-cols-2">
+          <div>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="font-bold text-slate-950">Comments</h3>
+              <span className="text-sm text-slate-500">{comments.length}</span>
+            </div>
+
+            <form onSubmit={handleCreateComment} className="mb-3 grid gap-2">
+              <textarea
+                value={commentContent}
+                onChange={(event) => setCommentContent(event.target.value)}
+                placeholder="Write a comment"
+                className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              />
+              <button
+                type="submit"
+                disabled={isAddingComment || !commentContent.trim()}
+                className="justify-self-end rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isAddingComment ? "Posting" : "Post comment"}
+              </button>
+            </form>
+
+            <div className="grid max-h-64 gap-2 overflow-y-auto">
+              {comments.length > 0 ? (
+                comments.map((comment) => (
+                  <div key={comment.id} className="rounded-md border border-slate-200 px-3 py-2">
+                    <div className="mb-1 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          {comment.user_name || "Demo User"}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {formatDateTime(comment.created_at)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteComment(comment.id)}
+                        className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm leading-5 text-slate-700">
+                      {comment.content}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-md border border-dashed border-slate-300 px-3 py-5 text-center text-sm text-slate-400">
+                  No comments yet
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="font-bold text-slate-950">Attachments</h3>
+              <span className="text-sm text-slate-500">{attachments.length}</span>
+            </div>
+
+            <form onSubmit={handleCreateAttachment} className="mb-3 grid gap-2">
+              <label className="flex min-h-20 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center hover:bg-slate-100">
+                <span className="text-sm font-semibold text-slate-800">
+                  {attachmentFile ? attachmentFile.name : "Choose file from computer"}
+                </span>
+                <span className="mt-1 text-xs text-slate-500">
+                  {attachmentFile
+                    ? `${Math.max(1, Math.round(attachmentFile.size / 1024))} KB selected`
+                    : "Maximum upload size: 10 MB"}
+                </span>
+                <input
+                  type="file"
+                  onChange={(event) => setAttachmentFile(event.target.files?.[0] || null)}
+                  className="sr-only"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={isAddingAttachment || !attachmentFile}
+                className="justify-self-end rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isAddingAttachment ? "Uploading" : "Upload file"}
+              </button>
+            </form>
+
+            <div className="grid max-h-64 gap-2 overflow-y-auto">
+              {attachments.length > 0 ? (
+                attachments.map((attachment) => (
+                  <div
+                    key={attachment.id}
+                    className="flex items-center justify-between gap-3 rounded-md border border-slate-200 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <a
+                        href={getAttachmentHref(attachment.file_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block truncate text-sm font-semibold text-slate-900 hover:underline"
+                      >
+                        {attachment.file_name}
+                      </a>
+                      <p className="text-[11px] text-slate-500">
+                        {attachment.users?.name || "Demo User"} / {formatDateTime(attachment.created_at)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteAttachment(attachment.id)}
+                      className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-md border border-dashed border-slate-300 px-3 py-5 text-center text-sm text-slate-400">
+                  No attachments yet
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );
@@ -377,21 +604,30 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const { id } = use(params);
 
   const [boardName, setBoardName] = useState("Loading...");
+  const [boardDescription, setBoardDescription] = useState("");
+  const [boardBackground, setBoardBackground] = useState("");
   const [columns, setColumns] = useState<Column[]>([]);
   const [boardMembers, setBoardMembers] = useState<BoardMember[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [taskComments, setTaskComments] = useState<TaskComment[]>([]);
+  const [taskAttachments, setTaskAttachments] = useState<TaskAttachment[]>([]);
   const [columnTitle, setColumnTitle] = useState("");
   const [taskTitles, setTaskTitles] = useState<Record<string, string>>({});
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("ALL");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTitle, setSettingsTitle] = useState("");
+  const [settingsDescription, setSettingsDescription] = useState("");
+  const [settingsBackground, setSettingsBackground] = useState("");
   const [memberUserId, setMemberUserId] = useState("");
   const [memberRole, setMemberRole] = useState<BoardRole>("MEMBER");
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingColumnTitle, setEditingColumnTitle] = useState("");
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isSavingColumn, setIsSavingColumn] = useState(false);
   const [isAddingMember, setIsAddingMember] = useState(false);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
@@ -476,6 +712,8 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     const userData = (await usersResponse.json()) as User[];
 
     setBoardName(boardData.title);
+    setBoardDescription(boardData.description || "");
+    setBoardBackground(boardData.background || "");
     setBoardMembers(boardData.board_members || []);
     setActivityLogs(boardData.activity_logs || []);
     setUsers(userData);
@@ -501,6 +739,41 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       isActive = false;
     };
   }, [fetchBoardData]);
+
+  const fetchTaskExtras = useCallback(async (taskId: string) => {
+    const [commentsResponse, attachmentsResponse] = await Promise.all([
+      fetch(`${API_BASE_URL}/api/tasks/${taskId}/comments`),
+      fetch(`${API_BASE_URL}/api/tasks/${taskId}/attachments`),
+    ]);
+
+    if (!commentsResponse.ok || !attachmentsResponse.ok) {
+      throw new Error("Load task extras failed");
+    }
+
+    const comments = (await commentsResponse.json()) as TaskComment[];
+    const attachments = (await attachmentsResponse.json()) as TaskAttachment[];
+
+    setTaskComments(comments);
+    setTaskAttachments(attachments);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedTaskId) {
+      return;
+    }
+
+    let isActive = true;
+
+    // Load task-side resources only after a card is selected.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchTaskExtras(selectedTaskId).catch(() => {
+      if (isActive) setError("Could not load task comments or attachments.");
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [fetchTaskExtras, selectedTaskId]);
 
   const handleCreateColumn = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -629,6 +902,43 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       setError("Could not remove member. Owners cannot be removed.");
     } finally {
       setRemovingMemberId(null);
+    }
+  };
+
+  const openSettings = () => {
+    setSettingsTitle(boardName);
+    setSettingsDescription(boardDescription);
+    setSettingsBackground(boardBackground);
+    setIsSettingsOpen(true);
+    setError("");
+  };
+
+  const handleSaveSettings = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!settingsTitle.trim()) return;
+
+    setIsSavingSettings(true);
+    setError("");
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/boards/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: settingsTitle.trim(),
+          description: settingsDescription.trim() || null,
+          background: settingsBackground.trim() || null,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Update board failed");
+
+      setIsSettingsOpen(false);
+      await fetchBoardData();
+    } catch {
+      setError("Could not save board settings. Try again.");
+    } finally {
+      setIsSavingSettings(false);
     }
   };
 
@@ -807,6 +1117,80 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     await fetchBoardData();
   };
 
+  const handleCreateComment = async (content: string) => {
+    if (!selectedTask) return;
+
+    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+
+    if (!res.ok) {
+      setError("Could not post comment. Try again.");
+      return;
+    }
+
+    await fetchTaskExtras(selectedTask.id);
+    await fetchBoardData();
+    setError("");
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!selectedTask) return;
+
+    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}/comments/${commentId}`, {
+      method: "DELETE",
+    });
+
+    if (!res.ok) {
+      setError("Could not delete comment. Try again.");
+      return;
+    }
+
+    await fetchTaskExtras(selectedTask.id);
+    await fetchBoardData();
+    setError("");
+  };
+
+  const handleCreateAttachment = async (file: File) => {
+    if (!selectedTask) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}/attachments`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!res.ok) {
+      setError("Could not add attachment. Try again.");
+      return;
+    }
+
+    await fetchTaskExtras(selectedTask.id);
+    await fetchBoardData();
+    setError("");
+  };
+
+  const handleDeleteAttachment = async (attachmentId: string) => {
+    if (!selectedTask) return;
+
+    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}/attachments/${attachmentId}`, {
+      method: "DELETE",
+    });
+
+    if (!res.ok) {
+      setError("Could not delete attachment. Try again.");
+      return;
+    }
+
+    await fetchTaskExtras(selectedTask.id);
+    await fetchBoardData();
+    setError("");
+  };
+
   const onDragEnd = async (result: DropResult) => {
     if (isFiltering) {
       setError("Clear search/filter before reordering tasks.");
@@ -883,9 +1267,16 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   if (!isBrowser) return null;
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900">
+    <div
+      className="min-h-screen text-slate-900"
+      style={{ backgroundColor: getBoardPageBackground(boardBackground) }}
+    >
       <header className="border-b border-slate-200 bg-white px-6 py-5">
         <div className="mx-auto flex max-w-7xl flex-col gap-4">
+          <div
+            className="h-1.5 rounded-full"
+            style={{ backgroundColor: getBoardAccent(boardBackground) }}
+          />
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
             <div>
               <Link
@@ -895,6 +1286,9 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                 Back to workspaces
               </Link>
               <h1 className="mt-1 text-2xl font-bold text-slate-950">{boardName}</h1>
+              {boardDescription && (
+                <p className="mt-1 max-w-2xl text-sm text-slate-600">{boardDescription}</p>
+              )}
               <p className="mt-1 text-sm text-slate-500">
                 {columns.length} columns / {totalTasks} tasks / {urgentTasks} urgent
               </p>
@@ -918,6 +1312,13 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                onClick={openSettings}
+                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 sm:col-span-2"
+              >
+                Board settings
+              </button>
             </div>
           </div>
 
@@ -1107,7 +1508,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                             ref={provided.innerRef}
                             {...provided.draggableProps}
                             {...provided.dragHandleProps}
-                            onClick={() => setSelectedTaskId(task.id)}
+                            onClick={() => {
+                              setTaskComments([]);
+                              setTaskAttachments([]);
+                              setSelectedTaskId(task.id);
+                            }}
                             className={`rounded-md border border-slate-200 bg-white p-3 shadow-sm transition ${
                               snapshot.isDragging
                                 ? "shadow-lg ring-2 ring-slate-300"
@@ -1203,18 +1608,121 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
         </main>
       </DragDropContext>
 
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+          <form
+            onSubmit={handleSaveSettings}
+            className="w-full max-w-lg rounded-lg bg-white p-5 shadow-2xl"
+          >
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Board settings
+                </p>
+                <h2 className="mt-1 text-xl font-bold text-slate-950">Workspace details</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(false)}
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-slate-500 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+
+            <label className="mb-3 block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">Board name</span>
+              <input
+                value={settingsTitle}
+                onChange={(event) => setSettingsTitle(event.target.value)}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                autoFocus
+              />
+            </label>
+
+            <label className="mb-3 block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">Description</span>
+              <textarea
+                value={settingsDescription}
+                onChange={(event) => setSettingsDescription(event.target.value)}
+                className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              />
+            </label>
+
+            <label className="mb-5 block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">Background color</span>
+              <div className="flex items-center gap-3 rounded-md border border-slate-300 px-3 py-2">
+                <input
+                  type="color"
+                  value={getColorValue(settingsBackground)}
+                  onChange={(event) => setSettingsBackground(event.target.value)}
+                  className="h-9 w-12 cursor-pointer rounded border border-slate-200 bg-white"
+                />
+                <input
+                  value={settingsBackground}
+                  onChange={(event) => setSettingsBackground(event.target.value)}
+                  placeholder="#f8fafc"
+                  className="min-w-0 flex-1 text-sm outline-none"
+                />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {["#f8fafc", "#e2e8f0", "#dbeafe", "#ccfbf1", "#dcfce7", "#fef3c7"].map(
+                  (color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setSettingsBackground(color)}
+                      className="h-7 w-10 rounded-md border border-slate-300 ring-offset-2 hover:ring-2 hover:ring-slate-300"
+                      style={{ backgroundColor: color }}
+                      aria-label={`Set background ${color}`}
+                    />
+                  )
+                )}
+              </div>
+            </label>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(false)}
+                className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingSettings || !settingsTitle.trim()}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSavingSettings ? "Saving" : "Save settings"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {selectedTask && (
         <TaskDetailModal
           key={selectedTask.id}
           task={selectedTask}
           members={boardMembers}
-          onClose={() => setSelectedTaskId(null)}
+          comments={taskComments}
+          attachments={taskAttachments}
+          onClose={() => {
+            setSelectedTaskId(null);
+            setTaskComments([]);
+            setTaskAttachments([]);
+          }}
           onSave={handleSaveTask}
           onDelete={handleDeleteTask}
           onDuplicate={handleDuplicateTask}
           onCreateSubTask={handleCreateSubTask}
           onToggleSubTask={handleToggleSubTask}
           onDeleteSubTask={handleDeleteSubTask}
+          onCreateComment={handleCreateComment}
+          onDeleteComment={handleDeleteComment}
+          onCreateAttachment={handleCreateAttachment}
+          onDeleteAttachment={handleDeleteAttachment}
         />
       )}
     </div>
