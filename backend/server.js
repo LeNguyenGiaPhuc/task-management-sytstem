@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 
+const authRoutes = require('./routes/auth.routes');
 const boardsRoutes = require('./routes/boards.routes');
 const columnsRoutes = require('./routes/columns.routes');
 const tasksRoutes = require('./routes/tasks.routes');
@@ -20,6 +21,7 @@ app.get('/', (req, res) => {
   res.send('Task Manager API is running smoothly!');
 });
 
+app.use('/api/auth', authRoutes);
 app.use('/api/boards', boardsRoutes);
 app.use('/api/columns', columnsRoutes);
 app.use('/api/tasks', tasksRoutes);

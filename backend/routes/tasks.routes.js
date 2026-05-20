@@ -3,9 +3,9 @@ const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
 const prisma = require('../lib/prisma');
+const { requireAuth, requireBoardRole } = require('../middleware/auth.middleware');
 const { logBoardActivity } = require('../services/activity.service');
 const { ensureTaskCommentsTable } = require('../services/comments.service');
-const { getDemoUserId } = require('../services/users.service');
 const { cleanText } = require('../utils/text');
 
 const router = express.Router();
@@ -25,6 +25,8 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024,
   },
 });
+
+router.use(requireAuth);
 
 const taskInclude = {
   users: {
@@ -56,6 +58,17 @@ async function getTaskBoard(taskId) {
 router.get('/', async (req, res) => {
   try {
     const tasks = await prisma.tasks.findMany({
+      where: {
+        columns: {
+          boards: {
+            board_members: {
+              some: {
+                user_id: req.user.id,
+              },
+            },
+          },
+        },
+      },
       orderBy: { order: 'asc' },
       include: taskInclude,
     });
@@ -74,6 +87,18 @@ router.post('/', async (req, res) => {
     if (!column_id || !title || !title.trim()) {
       return res.status(400).json({ error: 'Missing column_id or title' });
     }
+
+    const column = await prisma.columns.findUnique({
+      where: { id: column_id },
+      select: { board_id: true },
+    });
+
+    if (!column) {
+      return res.status(404).json({ error: 'Column not found' });
+    }
+
+    const role = await requireBoardRole(req, res, column.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
 
     const lastTask = await prisma.tasks.findFirst({
       where: { column_id },
@@ -94,13 +119,7 @@ router.post('/', async (req, res) => {
       include: taskInclude,
     });
 
-    const column = await prisma.columns.findUnique({
-      where: { id: column_id },
-      select: { board_id: true },
-    });
-    if (column) {
-      await logBoardActivity(column.board_id, `Created task ${newTask.title}`);
-    }
+    await logBoardActivity(column.board_id, `Created task ${newTask.title}`, req.user.id);
 
     res.status(201).json(newTask);
   } catch (error) {
@@ -142,6 +161,20 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
 
+    const role = await requireBoardRole(req, res, existingTask.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
+    if (column_id !== undefined && column_id !== existingTask.column_id) {
+      const destinationColumn = await prisma.columns.findUnique({
+        where: { id: column_id },
+        select: { board_id: true },
+      });
+
+      if (!destinationColumn || destinationColumn.board_id !== existingTask.columns.board_id) {
+        return res.status(400).json({ error: 'Cannot move task outside this board' });
+      }
+    }
+
     const updatedTask = await prisma.tasks.update({
       where: { id },
       data,
@@ -163,7 +196,7 @@ router.put('/:id', async (req, res) => {
       actionText = `Changed ${updatedTask.title} priority to ${updatedTask.priority}`;
     }
 
-    await logBoardActivity(existingTask.columns.board_id, actionText);
+    await logBoardActivity(existingTask.columns.board_id, actionText, req.user.id);
 
     res.status(200).json(updatedTask);
   } catch (error) {
@@ -175,6 +208,14 @@ router.put('/:id', async (req, res) => {
 router.get('/:id/comments', async (req, res) => {
   try {
     const { id } = req.params;
+    const task = await getTaskBoard(id);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const role = await requireBoardRole(req, res, task.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
     await ensureTaskCommentsTable();
 
     const comments = await prisma.$queryRawUnsafe(
@@ -214,7 +255,15 @@ router.post('/:id/comments', async (req, res) => {
     }
 
     await ensureTaskCommentsTable();
-    const userId = user_id || await getDemoUserId();
+    const task = await getTaskBoard(id);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const role = await requireBoardRole(req, res, task.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
+    const userId = req.user.id;
     const createdComments = await prisma.$queryRawUnsafe(
       `
         INSERT INTO task_comments (task_id, user_id, content)
@@ -226,11 +275,7 @@ router.post('/:id/comments', async (req, res) => {
       content.trim()
     );
     const comment = createdComments[0];
-    const task = await getTaskBoard(id);
-
-    if (task) {
-      await logBoardActivity(task.columns.board_id, `Commented on task ${task.title}`, userId);
-    }
+    await logBoardActivity(task.columns.board_id, `Commented on task ${task.title}`, userId);
 
     const comments = await prisma.$queryRawUnsafe(
       `
@@ -262,6 +307,14 @@ router.delete('/:taskId/comments/:commentId', async (req, res) => {
   try {
     const { taskId, commentId } = req.params;
     await ensureTaskCommentsTable();
+    const task = await getTaskBoard(taskId);
+
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const role = await requireBoardRole(req, res, task.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
 
     const existingComments = await prisma.$queryRawUnsafe(
       'SELECT id FROM task_comments WHERE id = $1::uuid AND task_id = $2::uuid',
@@ -279,10 +332,7 @@ router.delete('/:taskId/comments/:commentId', async (req, res) => {
       taskId
     );
 
-    const task = await getTaskBoard(taskId);
-    if (task) {
-      await logBoardActivity(task.columns.board_id, `Deleted a comment from ${task.title}`);
-    }
+    await logBoardActivity(task.columns.board_id, `Deleted a comment from ${task.title}`, req.user.id);
 
     res.status(204).send();
   } catch (error) {
@@ -294,6 +344,15 @@ router.delete('/:taskId/comments/:commentId', async (req, res) => {
 router.get('/:id/attachments', async (req, res) => {
   try {
     const { id } = req.params;
+    const task = await getTaskBoard(id);
+
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const role = await requireBoardRole(req, res, task.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
     const attachments = await prisma.task_attachments.findMany({
       where: { task_id: id },
       orderBy: { created_at: 'desc' },
@@ -330,7 +389,16 @@ router.post('/:id/attachments', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Missing attachment file or URL' });
     }
 
-    const uploadedBy = uploaded_by || await getDemoUserId();
+    const task = await getTaskBoard(id);
+
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const role = await requireBoardRole(req, res, task.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
+    const uploadedBy = req.user.id;
     const attachment = await prisma.task_attachments.create({
       data: {
         task_id: id,
@@ -349,11 +417,7 @@ router.post('/:id/attachments', upload.single('file'), async (req, res) => {
         },
       },
     });
-    const task = await getTaskBoard(id);
-
-    if (task) {
-      await logBoardActivity(task.columns.board_id, `Attached ${attachment.file_name} to ${task.title}`, uploadedBy);
-    }
+    await logBoardActivity(task.columns.board_id, `Attached ${attachment.file_name} to ${task.title}`, uploadedBy);
 
     res.status(201).json(attachment);
   } catch (error) {
@@ -365,6 +429,15 @@ router.post('/:id/attachments', upload.single('file'), async (req, res) => {
 router.delete('/:taskId/attachments/:attachmentId', async (req, res) => {
   try {
     const { taskId, attachmentId } = req.params;
+    const task = await getTaskBoard(taskId);
+
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const role = await requireBoardRole(req, res, task.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
     const attachment = await prisma.task_attachments.findFirst({
       where: {
         id: attachmentId,
@@ -382,10 +455,7 @@ router.delete('/:taskId/attachments/:attachmentId', async (req, res) => {
       fs.unlink(localPath, () => {});
     }
 
-    const task = await getTaskBoard(taskId);
-    if (task) {
-      await logBoardActivity(task.columns.board_id, `Removed attachment ${attachment.file_name} from ${task.title}`);
-    }
+    await logBoardActivity(task.columns.board_id, `Removed attachment ${attachment.file_name} from ${task.title}`, req.user.id);
 
     res.status(204).send();
   } catch (error) {
@@ -403,8 +473,11 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
 
+    const role = await requireBoardRole(req, res, task.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
     await prisma.tasks.delete({ where: { id } });
-    await logBoardActivity(task.columns.board_id, `Deleted task ${task.title}`);
+    await logBoardActivity(task.columns.board_id, `Deleted task ${task.title}`, req.user.id);
     res.status(204).send();
   } catch (error) {
     console.error('DELETE /api/tasks/:id failed:', error);

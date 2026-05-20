@@ -1,10 +1,12 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
+const { requireAuth, requireBoardRole } = require('../middleware/auth.middleware');
 const { logBoardActivity } = require('../services/activity.service');
-const { getDemoUserId } = require('../services/users.service');
 const { cleanText } = require('../utils/text');
 
 const router = express.Router();
+
+router.use(requireAuth);
 
 const boardSummaryInclude = {
   columns: {
@@ -71,6 +73,13 @@ const boardDetailInclude = {
 router.get('/', async (req, res) => {
   try {
     const boards = await prisma.boards.findMany({
+      where: {
+        board_members: {
+          some: {
+            user_id: req.user.id,
+          },
+        },
+      },
       orderBy: { created_at: 'desc' },
       include: boardSummaryInclude,
     });
@@ -84,13 +93,13 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { title, description, owner_id } = req.body;
+    const { title, description } = req.body;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Missing title' });
     }
 
-    const ownerId = owner_id || await getDemoUserId();
+    const ownerId = req.user.id;
     const newBoard = await prisma.$transaction(async (tx) => {
       const board = await tx.boards.create({
         data: {
@@ -123,7 +132,10 @@ router.post('/', async (req, res) => {
 router.post('/:id/duplicate', async (req, res) => {
   try {
     const { id } = req.params;
-    const ownerId = await getDemoUserId();
+    const role = await requireBoardRole(req, res, id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
+    const ownerId = req.user.id;
     const sourceBoard = await prisma.boards.findUnique({
       where: { id },
       include: boardDetailInclude,
@@ -210,6 +222,9 @@ router.post('/:id/duplicate', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const role = await requireBoardRole(req, res, id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
+
     const board = await prisma.boards.findUnique({
       where: { id },
       include: boardDetailInclude,
@@ -230,6 +245,8 @@ router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { title, description, background } = req.body;
+    const role = await requireBoardRole(req, res, id, ['ADMIN', 'OWNER']);
+    if (!role) return;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Missing title' });
@@ -245,7 +262,7 @@ router.put('/:id', async (req, res) => {
       include: boardSummaryInclude,
     });
 
-    await logBoardActivity(id, `Updated board ${updatedBoard.title}`);
+    await logBoardActivity(id, `Updated board ${updatedBoard.title}`, req.user.id);
 
     res.status(200).json(updatedBoard);
   } catch (error) {
@@ -258,6 +275,12 @@ router.post('/:id/members', async (req, res) => {
   try {
     const { id } = req.params;
     const { user_id, role } = req.body;
+    const actorRole = await requireBoardRole(req, res, id, ['ADMIN', 'OWNER']);
+    if (!actorRole) return;
+
+    if (role === 'OWNER' && actorRole !== 'OWNER') {
+      return res.status(403).json({ error: 'Only owners can add another owner' });
+    }
 
     if (!user_id) {
       return res.status(400).json({ error: 'Missing user_id' });
@@ -289,7 +312,7 @@ router.post('/:id/members', async (req, res) => {
       },
     });
 
-    await logBoardActivity(id, `Added ${member.users.name} as ${member.role}`);
+    await logBoardActivity(id, `Added ${member.users.name} as ${member.role}`, req.user.id);
 
     res.status(201).json(member);
   } catch (error) {
@@ -302,6 +325,8 @@ router.put('/:id/members/:userId', async (req, res) => {
   try {
     const { id, userId } = req.params;
     const { role } = req.body;
+    const actorRole = await requireBoardRole(req, res, id, ['OWNER']);
+    if (!actorRole) return;
 
     if (!role) {
       return res.status(400).json({ error: 'Missing role' });
@@ -327,7 +352,7 @@ router.put('/:id/members/:userId', async (req, res) => {
       },
     });
 
-    await logBoardActivity(id, `Changed ${member.users.name} role to ${member.role}`);
+    await logBoardActivity(id, `Changed ${member.users.name} role to ${member.role}`, req.user.id);
 
     res.status(200).json(member);
   } catch (error) {
@@ -339,6 +364,9 @@ router.put('/:id/members/:userId', async (req, res) => {
 router.delete('/:id/members/:userId', async (req, res) => {
   try {
     const { id, userId } = req.params;
+    const actorRole = await requireBoardRole(req, res, id, ['ADMIN', 'OWNER']);
+    if (!actorRole) return;
+
     const member = await prisma.board_members.findUnique({
       where: {
         board_id_user_id: {
@@ -372,7 +400,7 @@ router.delete('/:id/members/:userId', async (req, res) => {
       },
     });
 
-    await logBoardActivity(id, `Removed ${member.users.name} from board`);
+    await logBoardActivity(id, `Removed ${member.users.name} from board`, req.user.id);
 
     res.status(204).send();
   } catch (error) {
@@ -384,6 +412,9 @@ router.delete('/:id/members/:userId', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const role = await requireBoardRole(req, res, id, ['OWNER']);
+    if (!role) return;
+
     await prisma.boards.delete({ where: { id } });
     res.status(204).send();
   } catch (error) {

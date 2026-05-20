@@ -1,8 +1,11 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
+const { requireAuth, requireBoardRole } = require('../middleware/auth.middleware');
 const { logBoardActivity } = require('../services/activity.service');
 
 const router = express.Router();
+
+router.use(requireAuth);
 
 router.post('/', async (req, res) => {
   try {
@@ -11,6 +14,9 @@ router.post('/', async (req, res) => {
     if (!board_id || !title || !title.trim()) {
       return res.status(400).json({ error: 'Missing board_id or title' });
     }
+
+    const role = await requireBoardRole(req, res, board_id, ['ADMIN', 'OWNER']);
+    if (!role) return;
 
     const lastColumn = await prisma.columns.findFirst({
       where: { board_id },
@@ -26,7 +32,7 @@ router.post('/', async (req, res) => {
       },
     });
 
-    await logBoardActivity(board_id, `Created column ${newColumn.title}`);
+    await logBoardActivity(board_id, `Created column ${newColumn.title}`, req.user.id);
 
     res.status(201).json(newColumn);
   } catch (error) {
@@ -53,6 +59,9 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Column not found' });
     }
 
+    const role = await requireBoardRole(req, res, existingColumn.board_id, ['ADMIN', 'OWNER']);
+    if (!role) return;
+
     const updatedColumn = await prisma.columns.update({
       where: { id },
       data: { title: title.trim() },
@@ -60,7 +69,8 @@ router.put('/:id', async (req, res) => {
 
     await logBoardActivity(
       existingColumn.board_id,
-      `Renamed column ${existingColumn.title} to ${updatedColumn.title}`
+      `Renamed column ${existingColumn.title} to ${updatedColumn.title}`,
+      req.user.id
     );
 
     res.status(200).json(updatedColumn);
@@ -82,8 +92,11 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Column not found' });
     }
 
+    const role = await requireBoardRole(req, res, column.board_id, ['ADMIN', 'OWNER']);
+    if (!role) return;
+
     await prisma.columns.delete({ where: { id } });
-    await logBoardActivity(column.board_id, `Deleted column ${column.title}`);
+    await logBoardActivity(column.board_id, `Deleted column ${column.title}`, req.user.id);
     res.status(204).send();
   } catch (error) {
     console.error('DELETE /api/columns/:id failed:', error);

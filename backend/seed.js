@@ -1,4 +1,5 @@
 const prisma = require('./lib/prisma');
+const { ensureAuthColumn, hashPassword } = require('./services/auth.service');
 
 const day = 24 * 60 * 60 * 1000;
 
@@ -6,12 +7,23 @@ function dueDate(daysFromNow) {
   return new Date(Date.now() + daysFromNow * day);
 }
 
-async function ensureUser({ email, name, avatar_url }) {
-  return prisma.users.upsert({
+async function ensureUser({ email, name, avatar_url, password }) {
+  const user = await prisma.users.upsert({
     where: { email },
     update: { name, avatar_url },
     create: { email, name, avatar_url },
   });
+
+  if (password) {
+    const passwordHash = await hashPassword(password);
+    await prisma.$executeRawUnsafe(
+      'UPDATE users SET password_hash = $1 WHERE id = $2::uuid',
+      passwordHash,
+      user.id
+    );
+  }
+
+  return user;
 }
 
 async function ensureBoard({ title, description, background, ownerId }) {
@@ -176,20 +188,25 @@ async function ensureAttachment({ taskId, fileName, fileUrl, uploadedBy }) {
 }
 
 async function seed() {
+  await ensureAuthColumn();
+
   const owner = await ensureUser({
     email: 'demo@task-manager.local',
     name: 'Demo Owner',
     avatar_url: 'https://api.dicebear.com/8.x/initials/svg?seed=DO',
+    password: 'password123',
   });
   const designer = await ensureUser({
     email: 'designer@task-manager.local',
     name: 'Product Designer',
     avatar_url: 'https://api.dicebear.com/8.x/initials/svg?seed=PD',
+    password: 'password123',
   });
   const engineer = await ensureUser({
     email: 'engineer@task-manager.local',
     name: 'Fullstack Engineer',
     avatar_url: 'https://api.dicebear.com/8.x/initials/svg?seed=FE',
+    password: 'password123',
   });
 
   const jiraBoard = await ensureBoard({

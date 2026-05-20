@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, use, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
+import { API_BASE_URL, apiFetch } from "../../api";
 
 type Priority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 type PriorityFilter = "ALL" | Priority;
@@ -100,7 +101,6 @@ type TaskUpdate = {
 
 const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
 const roles: BoardRole[] = ["ADMIN", "MEMBER"];
-const API_BASE_URL = "http://127.0.0.1:5000";
 
 function normalizeTask(task: Task): Task {
   return {
@@ -700,8 +700,8 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
   const fetchBoardData = useCallback(async () => {
     const [boardResponse, usersResponse] = await Promise.all([
-      fetch(`${API_BASE_URL}/api/boards/${id}`),
-      fetch(`${API_BASE_URL}/api/users`),
+      apiFetch(`/api/boards/${id}`),
+      apiFetch("/api/users"),
     ]);
 
     if (!boardResponse.ok || !usersResponse.ok) {
@@ -742,8 +742,8 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
   const fetchTaskExtras = useCallback(async (taskId: string) => {
     const [commentsResponse, attachmentsResponse] = await Promise.all([
-      fetch(`${API_BASE_URL}/api/tasks/${taskId}/comments`),
-      fetch(`${API_BASE_URL}/api/tasks/${taskId}/attachments`),
+      apiFetch(`/api/tasks/${taskId}/comments`),
+      apiFetch(`/api/tasks/${taskId}/attachments`),
     ]);
 
     if (!commentsResponse.ok || !attachmentsResponse.ok) {
@@ -785,7 +785,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setIsSavingColumn(true);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/columns`, {
+      const res = await apiFetch("/api/columns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ board_id: id, title }),
@@ -813,7 +813,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setError("");
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/columns/${columnId}`, {
+      const res = await apiFetch(`/api/columns/${columnId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
@@ -842,7 +842,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setError("");
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/columns/${columnId}`, {
+      const res = await apiFetch(`/api/columns/${columnId}`, {
         method: "DELETE",
       });
 
@@ -865,7 +865,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setError("");
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/boards/${id}/members`, {
+      const res = await apiFetch(`/api/boards/${id}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -891,7 +891,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setError("");
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/boards/${id}/members/${userId}`, {
+      const res = await apiFetch(`/api/boards/${id}/members/${userId}`, {
         method: "DELETE",
       });
 
@@ -921,7 +921,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setError("");
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/boards/${id}`, {
+      const res = await apiFetch(`/api/boards/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -952,7 +952,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setSavingTaskColumnId(columnId);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/tasks`, {
+      const res = await apiFetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -983,7 +983,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleSaveTask = async (values: TaskUpdate) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}`, {
+    const res = await apiFetch(`/api/tasks/${selectedTask.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(values),
@@ -1003,7 +1003,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleDeleteTask = async () => {
     if (!selectedTask) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}`, {
+    const res = await apiFetch(`/api/tasks/${selectedTask.id}`, {
       method: "DELETE",
     });
 
@@ -1024,7 +1024,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     const column = columns.find((item) => item.tasks.some((task) => task.id === selectedTask.id));
     if (!column) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/tasks`, {
+    const res = await apiFetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1055,7 +1055,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleCreateSubTask = async (title: string) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/subtasks`, {
+    const res = await apiFetch("/api/subtasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ task_id: selectedTask.id, title }),
@@ -1075,7 +1075,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleToggleSubTask = async (subTask: SubTask) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/subtasks/${subTask.id}`, {
+    const res = await apiFetch(`/api/subtasks/${subTask.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_completed: !subTask.is_completed }),
@@ -1100,7 +1100,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleDeleteSubTask = async (subTaskId: string) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/subtasks/${subTaskId}`, {
+    const res = await apiFetch(`/api/subtasks/${subTaskId}`, {
       method: "DELETE",
     });
 
@@ -1120,7 +1120,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleCreateComment = async (content: string) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}/comments`, {
+    const res = await apiFetch(`/api/tasks/${selectedTask.id}/comments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
@@ -1139,7 +1139,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleDeleteComment = async (commentId: string) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}/comments/${commentId}`, {
+    const res = await apiFetch(`/api/tasks/${selectedTask.id}/comments/${commentId}`, {
       method: "DELETE",
     });
 
@@ -1159,7 +1159,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}/attachments`, {
+    const res = await apiFetch(`/api/tasks/${selectedTask.id}/attachments`, {
       method: "POST",
       body: formData,
     });
@@ -1177,7 +1177,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleDeleteAttachment = async (attachmentId: string) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}/attachments/${attachmentId}`, {
+    const res = await apiFetch(`/api/tasks/${selectedTask.id}/attachments/${attachmentId}`, {
       method: "DELETE",
     });
 
@@ -1248,7 +1248,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     }
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/tasks/${draggableId}`, {
+      const res = await apiFetch(`/api/tasks/${draggableId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -1,8 +1,11 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
+const { requireAuth, requireBoardRole } = require('../middleware/auth.middleware');
 const { logBoardActivity } = require('../services/activity.service');
 
 const router = express.Router();
+
+router.use(requireAuth);
 
 router.post('/', async (req, res) => {
   try {
@@ -11,6 +14,24 @@ router.post('/', async (req, res) => {
     if (!task_id || !title || !title.trim()) {
       return res.status(400).json({ error: 'Missing task_id or title' });
     }
+
+    const task = await prisma.tasks.findUnique({
+      where: { id: task_id },
+      include: {
+        columns: {
+          select: {
+            board_id: true,
+          },
+        },
+      },
+    });
+
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const role = await requireBoardRole(req, res, task.columns.board_id, ['MEMBER', 'ADMIN', 'OWNER']);
+    if (!role) return;
 
     const lastSubTask = await prisma.sub_tasks.findFirst({
       where: { task_id },
@@ -26,19 +47,7 @@ router.post('/', async (req, res) => {
       },
     });
 
-    const task = await prisma.tasks.findUnique({
-      where: { id: task_id },
-      include: {
-        columns: {
-          select: {
-            board_id: true,
-          },
-        },
-      },
-    });
-    if (task) {
-      await logBoardActivity(task.columns.board_id, `Added checklist item to ${task.title}`);
-    }
+    await logBoardActivity(task.columns.board_id, `Added checklist item to ${task.title}`, req.user.id);
 
     res.status(201).json(newSubTask);
   } catch (error) {
@@ -76,6 +85,14 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Subtask not found' });
     }
 
+    const role = await requireBoardRole(
+      req,
+      res,
+      existingSubTask.tasks.columns.board_id,
+      ['MEMBER', 'ADMIN', 'OWNER']
+    );
+    if (!role) return;
+
     const updatedSubTask = await prisma.sub_tasks.update({
       where: { id },
       data,
@@ -85,7 +102,7 @@ router.put('/:id', async (req, res) => {
       is_completed !== undefined
         ? `${updatedSubTask.is_completed ? 'Completed' : 'Reopened'} checklist item on ${existingSubTask.tasks.title}`
         : `Updated checklist item on ${existingSubTask.tasks.title}`;
-    await logBoardActivity(existingSubTask.tasks.columns.board_id, actionText);
+    await logBoardActivity(existingSubTask.tasks.columns.board_id, actionText, req.user.id);
 
     res.status(200).json(updatedSubTask);
   } catch (error) {
@@ -116,8 +133,16 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Subtask not found' });
     }
 
+    const role = await requireBoardRole(
+      req,
+      res,
+      subTask.tasks.columns.board_id,
+      ['MEMBER', 'ADMIN', 'OWNER']
+    );
+    if (!role) return;
+
     await prisma.sub_tasks.delete({ where: { id } });
-    await logBoardActivity(subTask.tasks.columns.board_id, `Deleted checklist item from ${subTask.tasks.title}`);
+    await logBoardActivity(subTask.tasks.columns.board_id, `Deleted checklist item from ${subTask.tasks.title}`, req.user.id);
     res.status(204).send();
   } catch (error) {
     console.error('DELETE /api/subtasks/:id failed:', error);

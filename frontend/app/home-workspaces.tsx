@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiFetch, clearAuthToken, setAuthToken, type AuthUser } from "./api";
 import CreateBoardButton from "./create-board-button";
 
 type BoardColumnSummary = {
@@ -21,6 +22,25 @@ export type HomeBoard = {
 };
 
 type SortMode = "recent" | "updated" | "az" | "za";
+type AuthMode = "login" | "register";
+
+const demoAccounts = [
+  {
+    role: "OWNER",
+    email: "demo@task-manager.local",
+    note: "Full board control",
+  },
+  {
+    role: "ADMIN",
+    email: "designer@task-manager.local",
+    note: "Manage board and columns",
+  },
+  {
+    role: "MEMBER",
+    email: "engineer@task-manager.local",
+    note: "Work on tasks",
+  },
+];
 
 function getTaskCount(board: HomeBoard) {
   return (board.columns || []).reduce(
@@ -38,9 +58,16 @@ function formatDate(value?: string | null) {
   }).format(new Date(value));
 }
 
-export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeBoard[] }) {
+export default function HomeWorkspaces() {
   const router = useRouter();
-  const [boards, setBoards] = useState(initialBoards);
+  const [boards, setBoards] = useState<HomeBoard[]>([]);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [isAuthChecked, setIsAuthChecked] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("recent");
   const [editingBoard, setEditingBoard] = useState<HomeBoard | null>(null);
@@ -83,6 +110,86 @@ export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeB
     0
   );
 
+  const loadBoards = useCallback(async () => {
+    const response = await apiFetch("/api/boards");
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearAuthToken();
+        setCurrentUser(null);
+        return;
+      }
+      throw new Error("Load boards failed");
+    }
+
+    const boardData = (await response.json()) as HomeBoard[];
+    setBoards(boardData);
+  }, []);
+
+  const loadSession = useCallback(async () => {
+    const response = await apiFetch("/api/auth/me");
+
+    if (!response.ok) {
+      clearAuthToken();
+      setCurrentUser(null);
+      setBoards([]);
+      setIsAuthChecked(true);
+      return;
+    }
+
+    const data = (await response.json()) as { user: AuthUser };
+    setCurrentUser(data.user);
+    await loadBoards();
+    setIsAuthChecked(true);
+  }, [loadBoards]);
+
+  useEffect(() => {
+    // Restore an existing local JWT session on first client render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadSession();
+  }, [loadSession]);
+
+  const handleAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsAuthenticating(true);
+    setError("");
+
+    try {
+      const response = await fetch(`http://127.0.0.1:5000/api/auth/${authMode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: authEmail.trim(),
+          password: authPassword,
+          ...(authMode === "register" ? { name: authName.trim() } : {}),
+        }),
+      });
+
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        throw new Error(data.error || "Authentication failed");
+      }
+
+      const data = (await response.json()) as { token: string; user: AuthUser };
+      setAuthToken(data.token);
+      setCurrentUser(data.user);
+      setAuthPassword("");
+      await loadBoards();
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Could not authenticate.");
+    } finally {
+      setIsAuthenticating(false);
+      setIsAuthChecked(true);
+    }
+  };
+
+  const handleLogout = () => {
+    clearAuthToken();
+    setCurrentUser(null);
+    setBoards([]);
+    router.push("/");
+  };
+
   const openEdit = (board: HomeBoard) => {
     setEditingBoard(board);
     setTitle(board.title);
@@ -105,7 +212,7 @@ export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeB
     setError("");
 
     try {
-      const response = await fetch(`http://127.0.0.1:5000/api/boards/${editingBoard.id}`, {
+      const response = await apiFetch(`/api/boards/${editingBoard.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -123,7 +230,6 @@ export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeB
           board.id === updatedBoard.id ? updatedBoard : board
         )
       );
-      router.refresh();
       closeEdit();
     } catch {
       setError("Khong luu duoc board. Kiem tra backend roi thu lai.");
@@ -137,7 +243,7 @@ export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeB
     setError("");
 
     try {
-      const response = await fetch(`http://127.0.0.1:5000/api/boards/${boardId}/duplicate`, {
+      const response = await apiFetch(`/api/boards/${boardId}/duplicate`, {
         method: "POST",
       });
 
@@ -145,7 +251,6 @@ export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeB
 
       const duplicatedBoard = (await response.json()) as HomeBoard;
       setBoards((currentBoards) => [duplicatedBoard, ...currentBoards]);
-      router.refresh();
     } catch {
       setError("Khong nhan ban duoc board. Kiem tra backend roi thu lai.");
     } finally {
@@ -160,7 +265,7 @@ export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeB
     setError("");
 
     try {
-      const response = await fetch(`http://127.0.0.1:5000/api/boards/${deletingBoard.id}`, {
+      const response = await apiFetch(`/api/boards/${deletingBoard.id}`, {
         method: "DELETE",
       });
 
@@ -170,13 +275,129 @@ export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeB
         currentBoards.filter((board) => board.id !== deletingBoard.id)
       );
       setDeletingBoard(null);
-      router.refresh();
     } catch {
       setError("Khong xoa duoc board. Kiem tra backend roi thu lai.");
     } finally {
       setIsDeleting(false);
     }
   };
+
+  if (!isAuthChecked) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-100 px-6 text-slate-900">
+        <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 text-sm font-medium text-slate-600 shadow-sm">
+          Loading workspace...
+        </div>
+      </main>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-100 px-6 text-slate-900">
+        <form
+          onSubmit={handleAuthSubmit}
+          className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Task Manager
+          </p>
+          <h1 className="mt-1 text-2xl font-bold text-slate-950">
+            {authMode === "login" ? "Login to your workspace" : "Create your account"}
+          </h1>
+          <p className="mt-2 text-sm text-slate-500">
+            Use a real account to manage boards with OWNER, ADMIN, and MEMBER permissions.
+          </p>
+
+          {authMode === "register" && (
+            <label className="mt-5 block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">Name</span>
+              <input
+                value={authName}
+                onChange={(event) => setAuthName(event.target.value)}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              />
+            </label>
+          )}
+
+          <label className="mt-4 block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Email</span>
+            <input
+              type="email"
+              value={authEmail}
+              onChange={(event) => setAuthEmail(event.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+            />
+          </label>
+
+          <label className="mt-4 block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Password</span>
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(event) => setAuthPassword(event.target.value)}
+              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+            />
+          </label>
+
+          {error && (
+            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+              {error}
+            </div>
+          )}
+
+          <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-900">Demo accounts</p>
+              <p className="text-xs font-medium text-slate-500">Password: password123</p>
+            </div>
+            <div className="grid gap-2">
+              {demoAccounts.map((account) => (
+                <button
+                  key={account.email}
+                  type="button"
+                  onClick={() => {
+                    setAuthMode("login");
+                    setAuthEmail(account.email);
+                    setAuthPassword("password123");
+                    setError("");
+                  }}
+                  className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-left hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-xs font-bold text-slate-900">{account.role}</span>
+                    <span className="block truncate text-xs text-slate-500">{account.email}</span>
+                  </span>
+                  <span className="shrink-0 text-[11px] font-medium text-slate-500">
+                    {account.note}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isAuthenticating || !authEmail.trim() || !authPassword || (authMode === "register" && !authName.trim())}
+            className="mt-5 h-10 w-full rounded-md bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isAuthenticating ? "Please wait" : authMode === "login" ? "Login" : "Register"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode(authMode === "login" ? "register" : "login");
+              setError("");
+            }}
+            className="mt-3 w-full rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          >
+            {authMode === "login" ? "Need an account? Register" : "Already have an account? Login"}
+          </button>
+        </form>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-slate-100 px-6 py-8 text-slate-900">
@@ -192,7 +413,22 @@ export default function HomeWorkspaces({ initialBoards }: { initialBoards: HomeB
                 {boards.length} boards / {totalColumns} columns / {totalTasks} tasks
               </p>
             </div>
-            <CreateBoardButton />
+            <div className="flex flex-col items-start gap-2 sm:items-end">
+              <div className="text-right">
+                <p className="text-sm font-semibold text-slate-900">{currentUser.name}</p>
+                <p className="text-xs text-slate-500">{currentUser.email}</p>
+              </div>
+              <div className="flex gap-2">
+                <CreateBoardButton onCreated={loadBoards} />
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                >
+                  Logout
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-[1fr_180px]">

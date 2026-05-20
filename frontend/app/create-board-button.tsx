@@ -2,12 +2,13 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiFetch } from "./api";
 
 type CreateBoardResponse = {
   id: string;
 };
 
-export default function CreateBoardButton() {
+export default function CreateBoardButton({ onCreated }: { onCreated: () => Promise<void> }) {
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [title, setTitle] = useState("");
@@ -25,7 +26,7 @@ export default function CreateBoardButton() {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("http://127.0.0.1:5000/api/boards", {
+      const response = await apiFetch("/api/boards", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -42,7 +43,7 @@ export default function CreateBoardButton() {
       setTitle("");
       setDescription("");
       setIsOpen(false);
-      router.refresh();
+      await onCreated();
       router.push(`/boards/${board.id}`);
     } catch {
       setError("Khong tao duoc board. Kiem tra backend roi thu lai.");

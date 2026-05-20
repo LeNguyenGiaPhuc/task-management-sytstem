@@ -1,7 +1,10 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
+const { requireAuth } = require('../middleware/auth.middleware');
 
 const router = express.Router();
+
+router.use(requireAuth);
 
 router.get('/', async (req, res) => {
   try {
