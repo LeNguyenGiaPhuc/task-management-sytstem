@@ -1,11 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, use, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { FormEvent, use, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 
 type Priority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 type PriorityFilter = "ALL" | Priority;
+type BoardRole = "OWNER" | "ADMIN" | "MEMBER";
+
+type User = {
+  id: string;
+  email: string;
+  name: string;
+  avatar_url?: string | null;
+};
+
+type BoardMember = {
+  board_id: string;
+  user_id: string;
+  role?: BoardRole | null;
+  joined_at?: string | null;
+  users: User;
+};
+
+type ActivityLog = {
+  id: string;
+  action_text: string;
+  created_at?: string | null;
+  users?: Pick<User, "id" | "email" | "name" | "avatar_url"> | null;
+};
 
 type SubTask = {
   id: string;
@@ -20,8 +43,10 @@ type Task = {
   title: string;
   description?: string | null;
   priority?: Priority | null;
+  assignee_id?: string | null;
   due_date?: string | null;
   order: number;
+  users?: User | null;
   sub_tasks?: SubTask[];
 };
 
@@ -34,6 +59,8 @@ type Column = {
 
 type BoardData = {
   title: string;
+  board_members?: BoardMember[];
+  activity_logs?: ActivityLog[];
   columns?: Column[];
 };
 
@@ -43,10 +70,13 @@ type TaskUpdate = {
   title: string;
   description: string | null;
   priority: Priority;
+  assignee_id: string | null;
   due_date: string | null;
 };
 
 const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+const roles: BoardRole[] = ["ADMIN", "MEMBER"];
+const API_BASE_URL = "http://127.0.0.1:5000";
 
 function normalizeTask(task: Task): Task {
   return {
@@ -58,6 +88,25 @@ function normalizeTask(task: Task): Task {
 function toDateInputValue(value?: string | null) {
   if (!value) return "";
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "No date";
+  return new Intl.DateTimeFormat("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function getInitials(name: string) {
+  return name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
 }
 
 function getColumnTaskCount(columns: Column[]) {
@@ -73,6 +122,7 @@ function getPriorityClass(priority?: Priority | null) {
 
 function TaskDetailModal({
   task,
+  members,
   onClose,
   onSave,
   onDelete,
@@ -82,6 +132,7 @@ function TaskDetailModal({
   onDeleteSubTask,
 }: {
   task: Task;
+  members: BoardMember[];
   onClose: () => void;
   onSave: (values: TaskUpdate) => Promise<void>;
   onDelete: () => Promise<void>;
@@ -93,6 +144,7 @@ function TaskDetailModal({
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || "");
   const [priority, setPriority] = useState<Priority>(task.priority || "MEDIUM");
+  const [assigneeId, setAssigneeId] = useState(task.assignee_id || "");
   const [dueDate, setDueDate] = useState(toDateInputValue(task.due_date));
   const [subTaskTitle, setSubTaskTitle] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -112,6 +164,7 @@ function TaskDetailModal({
         title: title.trim(),
         description: description.trim() || null,
         priority,
+        assignee_id: assigneeId || null,
         due_date: dueDate || null,
       });
     } finally {
@@ -189,7 +242,7 @@ function TaskDetailModal({
             />
           </label>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <label>
               <span className="mb-1 block text-sm font-medium text-slate-700">Priority</span>
               <select
@@ -200,6 +253,22 @@ function TaskDetailModal({
                 {priorities.map((item) => (
                   <option key={item} value={item}>
                     {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              <span className="mb-1 block text-sm font-medium text-slate-700">Assignee</span>
+              <select
+                value={assigneeId}
+                onChange={(event) => setAssigneeId(event.target.value)}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              >
+                <option value="">Unassigned</option>
+                {members.map((member) => (
+                  <option key={member.user_id} value={member.user_id}>
+                    {member.users.name}
                   </option>
                 ))}
               </select>
@@ -309,16 +378,23 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
   const [boardName, setBoardName] = useState("Loading...");
   const [columns, setColumns] = useState<Column[]>([]);
+  const [boardMembers, setBoardMembers] = useState<BoardMember[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [columnTitle, setColumnTitle] = useState("");
   const [taskTitles, setTaskTitles] = useState<Record<string, string>>({});
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("ALL");
+  const [memberUserId, setMemberUserId] = useState("");
+  const [memberRole, setMemberRole] = useState<BoardRole>("MEMBER");
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingColumnTitle, setEditingColumnTitle] = useState("");
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [isSavingColumn, setIsSavingColumn] = useState(false);
+  const [isAddingMember, setIsAddingMember] = useState(false);
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [savingColumnId, setSavingColumnId] = useState<string | null>(null);
   const [savingTaskColumnId, setSavingTaskColumnId] = useState<string | null>(null);
   const isBrowser = useSyncExternalStore(
@@ -335,6 +411,9 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const urgentTasks = columns
     .flatMap((column) => column.tasks)
     .filter((task) => task.priority === "URGENT").length;
+  const availableUsers = users.filter(
+    (user) => !boardMembers.some((member) => member.user_id === user.id)
+  );
 
   const visibleColumns = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -383,37 +462,45 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     );
   };
 
+  const fetchBoardData = useCallback(async () => {
+    const [boardResponse, usersResponse] = await Promise.all([
+      fetch(`${API_BASE_URL}/api/boards/${id}`),
+      fetch(`${API_BASE_URL}/api/users`),
+    ]);
+
+    if (!boardResponse.ok || !usersResponse.ok) {
+      throw new Error("Load board failed");
+    }
+
+    const boardData = (await boardResponse.json()) as BoardData;
+    const userData = (await usersResponse.json()) as User[];
+
+    setBoardName(boardData.title);
+    setBoardMembers(boardData.board_members || []);
+    setActivityLogs(boardData.activity_logs || []);
+    setUsers(userData);
+    setColumns(
+      (boardData.columns || []).map((column) => ({
+        ...column,
+        tasks: column.tasks.map(normalizeTask),
+      }))
+    );
+    setError("");
+  }, [id]);
+
   useEffect(() => {
     let isActive = true;
 
-    const fetchBoardData = async () => {
-      try {
-        const res = await fetch(`http://127.0.0.1:5000/api/boards/${id}`);
-        if (!res.ok) throw new Error("Load board failed");
-
-        const boardData = (await res.json()) as BoardData;
-
-        if (isActive) {
-          setBoardName(boardData.title);
-          setColumns(
-            (boardData.columns || []).map((column) => ({
-              ...column,
-              tasks: column.tasks.map(normalizeTask),
-            }))
-          );
-          setError("");
-        }
-      } catch {
-        if (isActive) setError("Could not load board. Check backend and try again.");
-      }
-    };
-
-    fetchBoardData();
+    // Client-side board hydration after Next resolves the dynamic route params.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchBoardData().catch(() => {
+      if (isActive) setError("Could not load board. Check backend and try again.");
+    });
 
     return () => {
       isActive = false;
     };
-  }, [id]);
+  }, [fetchBoardData]);
 
   const handleCreateColumn = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -425,7 +512,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setIsSavingColumn(true);
 
     try {
-      const res = await fetch("http://127.0.0.1:5000/api/columns", {
+      const res = await fetch(`${API_BASE_URL}/api/columns`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ board_id: id, title }),
@@ -436,6 +523,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       const column = (await res.json()) as CreatedColumn;
       setColumns((currentColumns) => [...currentColumns, { ...column, tasks: [] }]);
       setColumnTitle("");
+      await fetchBoardData();
     } catch {
       setError("Could not create column. Check backend and try again.");
     } finally {
@@ -452,7 +540,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setError("");
 
     try {
-      const res = await fetch(`http://127.0.0.1:5000/api/columns/${columnId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/columns/${columnId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
@@ -468,6 +556,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       );
       setEditingColumnId(null);
       setEditingColumnTitle("");
+      await fetchBoardData();
     } catch {
       setError("Could not rename column. Try again.");
     } finally {
@@ -480,17 +569,66 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setError("");
 
     try {
-      const res = await fetch(`http://127.0.0.1:5000/api/columns/${columnId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/columns/${columnId}`, {
         method: "DELETE",
       });
 
       if (!res.ok) throw new Error("Delete column failed");
 
       setColumns((currentColumns) => currentColumns.filter((column) => column.id !== columnId));
+      await fetchBoardData();
     } catch {
       setError("Could not delete column. Try again.");
     } finally {
       setDeletingColumnId(null);
+    }
+  };
+
+  const handleAddMember = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!memberUserId) return;
+
+    setIsAddingMember(true);
+    setError("");
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/boards/${id}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: memberUserId,
+          role: memberRole,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Add member failed");
+
+      setMemberUserId("");
+      setMemberRole("MEMBER");
+      await fetchBoardData();
+    } catch {
+      setError("Could not add member. Try again.");
+    } finally {
+      setIsAddingMember(false);
+    }
+  };
+
+  const handleRemoveMember = async (userId: string) => {
+    setRemovingMemberId(userId);
+    setError("");
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/boards/${id}/members/${userId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) throw new Error("Remove member failed");
+
+      await fetchBoardData();
+    } catch {
+      setError("Could not remove member. Owners cannot be removed.");
+    } finally {
+      setRemovingMemberId(null);
     }
   };
 
@@ -504,7 +642,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setSavingTaskColumnId(columnId);
 
     try {
-      const res = await fetch("http://127.0.0.1:5000/api/tasks", {
+      const res = await fetch(`${API_BASE_URL}/api/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -524,6 +662,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
         )
       );
       setTaskTitles((currentTitles) => ({ ...currentTitles, [columnId]: "" }));
+      await fetchBoardData();
     } catch {
       setError("Could not create task. Check backend and try again.");
     } finally {
@@ -534,7 +673,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const handleSaveTask = async (values: TaskUpdate) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`http://127.0.0.1:5000/api/tasks/${selectedTask.id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(values),
@@ -548,12 +687,13 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     const updatedTask = normalizeTask((await res.json()) as Task);
     updateTaskInColumns(updatedTask);
     setError("");
+    await fetchBoardData();
   };
 
   const handleDeleteTask = async () => {
     if (!selectedTask) return;
 
-    const res = await fetch(`http://127.0.0.1:5000/api/tasks/${selectedTask.id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/tasks/${selectedTask.id}`, {
       method: "DELETE",
     });
 
@@ -565,6 +705,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     removeTaskFromColumns(selectedTask.id);
     setSelectedTaskId(null);
     setError("");
+    await fetchBoardData();
   };
 
   const handleDuplicateTask = async () => {
@@ -573,7 +714,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     const column = columns.find((item) => item.tasks.some((task) => task.id === selectedTask.id));
     if (!column) return;
 
-    const res = await fetch("http://127.0.0.1:5000/api/tasks", {
+    const res = await fetch(`${API_BASE_URL}/api/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -581,6 +722,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
         title: `${selectedTask.title} Copy`,
         description: selectedTask.description || null,
         priority: selectedTask.priority || "MEDIUM",
+        assignee_id: selectedTask.assignee_id || null,
         due_date: selectedTask.due_date || null,
       }),
     });
@@ -597,12 +739,13 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       )
     );
     setError("");
+    await fetchBoardData();
   };
 
   const handleCreateSubTask = async (title: string) => {
     if (!selectedTask) return;
 
-    const res = await fetch("http://127.0.0.1:5000/api/subtasks", {
+    const res = await fetch(`${API_BASE_URL}/api/subtasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ task_id: selectedTask.id, title }),
@@ -616,12 +759,13 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     const subTask = (await res.json()) as SubTask;
     updateSubTasksInColumns(selectedTask.id, [...(selectedTask.sub_tasks || []), subTask]);
     setError("");
+    await fetchBoardData();
   };
 
   const handleToggleSubTask = async (subTask: SubTask) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`http://127.0.0.1:5000/api/subtasks/${subTask.id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/subtasks/${subTask.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_completed: !subTask.is_completed }),
@@ -640,12 +784,13 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       )
     );
     setError("");
+    await fetchBoardData();
   };
 
   const handleDeleteSubTask = async (subTaskId: string) => {
     if (!selectedTask) return;
 
-    const res = await fetch(`http://127.0.0.1:5000/api/subtasks/${subTaskId}`, {
+    const res = await fetch(`${API_BASE_URL}/api/subtasks/${subTaskId}`, {
       method: "DELETE",
     });
 
@@ -659,6 +804,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       (selectedTask.sub_tasks || []).filter((item) => item.id !== subTaskId)
     );
     setError("");
+    await fetchBoardData();
   };
 
   const onDragEnd = async (result: DropResult) => {
@@ -718,7 +864,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     }
 
     try {
-      const res = await fetch(`http://127.0.0.1:5000/api/tasks/${draggableId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/tasks/${draggableId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -728,6 +874,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       });
 
       if (!res.ok) throw new Error("Move task failed");
+      await fetchBoardData();
     } catch {
       setError("Could not save task position. Try again.");
     }
@@ -745,7 +892,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                 href="/"
                 className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
               >
-                ← Back to workspaces
+                Back to workspaces
               </Link>
               <h1 className="mt-1 text-2xl font-bold text-slate-950">{boardName}</h1>
               <p className="mt-1 text-sm text-slate-500">
@@ -779,6 +926,106 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
               {error}
             </div>
           )}
+
+          <div className="grid gap-3 lg:grid-cols-[1fr_1.2fr]">
+            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">Team</h2>
+                  <p className="text-xs text-slate-500">{boardMembers.length} members</p>
+                </div>
+              </div>
+
+              <div className="mb-3 flex flex-wrap gap-2">
+                {boardMembers.map((member) => (
+                  <div
+                    key={member.user_id}
+                    className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5"
+                  >
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-[10px] font-bold text-white">
+                      {getInitials(member.users.name)}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="max-w-32 truncate text-xs font-semibold text-slate-900">
+                        {member.users.name}
+                      </p>
+                      <p className="text-[10px] font-medium text-slate-500">{member.role}</p>
+                    </div>
+                    {member.role !== "OWNER" && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveMember(member.user_id)}
+                        disabled={removingMemberId === member.user_id}
+                        className="rounded px-1.5 py-1 text-[10px] font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <form onSubmit={handleAddMember} className="grid gap-2 sm:grid-cols-[1fr_110px_auto]">
+                <select
+                  value={memberUserId}
+                  onChange={(event) => setMemberUserId(event.target.value)}
+                  className="h-9 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                >
+                  <option value="">
+                    {availableUsers.length > 0 ? "Select user" : "No users available"}
+                  </option>
+                  {availableUsers.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={memberRole}
+                  onChange={(event) => setMemberRole(event.target.value as BoardRole)}
+                  className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                >
+                  {roles.map((role) => (
+                    <option key={role} value={role}>
+                      {role}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  disabled={isAddingMember || !memberUserId}
+                  className="h-9 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </form>
+            </section>
+
+            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">Recent activity</h2>
+                  <p className="text-xs text-slate-500">Latest board changes</p>
+                </div>
+              </div>
+              <div className="grid max-h-32 gap-2 overflow-y-auto">
+                {activityLogs.length > 0 ? (
+                  activityLogs.map((log) => (
+                    <div key={log.id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                      <p className="text-xs font-medium text-slate-800">{log.action_text}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        {log.users?.name || "System"} / {formatDateTime(log.created_at)}
+                      </p>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-5 text-center text-sm text-slate-400">
+                    No activity yet
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
         </div>
       </header>
 
@@ -876,6 +1123,14 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                               >
                                 {task.priority || "MEDIUM"}
                               </span>
+                              {task.users && (
+                                <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-700 text-[8px] font-bold text-white">
+                                    {getInitials(task.users.name)}
+                                  </span>
+                                  {task.users.name}
+                                </span>
+                              )}
                               {task.due_date && (
                                 <span className="text-[11px] font-medium text-slate-500">
                                   Due {toDateInputValue(task.due_date)}
@@ -952,6 +1207,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
         <TaskDetailModal
           key={selectedTask.id}
           task={selectedTask}
+          members={boardMembers}
           onClose={() => setSelectedTaskId(null)}
           onSave={handleSaveTask}
           onDelete={handleDeleteTask}

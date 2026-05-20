@@ -1,5 +1,6 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
+const { logBoardActivity } = require('../services/activity.service');
 const { getDemoUserId } = require('../services/users.service');
 const { cleanText } = require('../utils/text');
 
@@ -17,12 +18,47 @@ const boardSummaryInclude = {
 };
 
 const boardDetailInclude = {
+  board_members: {
+    orderBy: { joined_at: 'asc' },
+    include: {
+      users: {
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          avatar_url: true,
+        },
+      },
+    },
+  },
+  activity_logs: {
+    orderBy: { created_at: 'desc' },
+    take: 12,
+    include: {
+      users: {
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          avatar_url: true,
+        },
+      },
+    },
+  },
   columns: {
     orderBy: { order: 'asc' },
     include: {
       tasks: {
         orderBy: { order: 'asc' },
         include: {
+          users: {
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              avatar_url: true,
+            },
+          },
           sub_tasks: {
             orderBy: { order: 'asc' },
           },
@@ -74,6 +110,8 @@ router.post('/', async (req, res) => {
 
       return board;
     });
+
+    await logBoardActivity(newBoard.id, `Created board ${newBoard.title}`, ownerId);
 
     res.status(201).json(newBoard);
   } catch (error) {
@@ -151,6 +189,12 @@ router.post('/:id/duplicate', async (req, res) => {
       return board;
     });
 
+    await logBoardActivity(
+      duplicatedBoard.id,
+      `Duplicated board from ${sourceBoard.title}`,
+      ownerId
+    );
+
     const boardWithSummary = await prisma.boards.findUnique({
       where: { id: duplicatedBoard.id },
       include: boardSummaryInclude,
@@ -201,10 +245,139 @@ router.put('/:id', async (req, res) => {
       include: boardSummaryInclude,
     });
 
+    await logBoardActivity(id, `Updated board ${updatedBoard.title}`);
+
     res.status(200).json(updatedBoard);
   } catch (error) {
     console.error('PUT /api/boards/:id failed:', error);
     res.status(500).json({ error: 'Server error while updating board' });
+  }
+});
+
+router.post('/:id/members', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { user_id, role } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({ error: 'Missing user_id' });
+    }
+
+    const memberRole = role || 'MEMBER';
+    const member = await prisma.board_members.upsert({
+      where: {
+        board_id_user_id: {
+          board_id: id,
+          user_id,
+        },
+      },
+      update: { role: memberRole },
+      create: {
+        board_id: id,
+        user_id,
+        role: memberRole,
+      },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            avatar_url: true,
+          },
+        },
+      },
+    });
+
+    await logBoardActivity(id, `Added ${member.users.name} as ${member.role}`);
+
+    res.status(201).json(member);
+  } catch (error) {
+    console.error('POST /api/boards/:id/members failed:', error);
+    res.status(500).json({ error: 'Server error while adding board member' });
+  }
+});
+
+router.put('/:id/members/:userId', async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+    const { role } = req.body;
+
+    if (!role) {
+      return res.status(400).json({ error: 'Missing role' });
+    }
+
+    const member = await prisma.board_members.update({
+      where: {
+        board_id_user_id: {
+          board_id: id,
+          user_id: userId,
+        },
+      },
+      data: { role },
+      include: {
+        users: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            avatar_url: true,
+          },
+        },
+      },
+    });
+
+    await logBoardActivity(id, `Changed ${member.users.name} role to ${member.role}`);
+
+    res.status(200).json(member);
+  } catch (error) {
+    console.error('PUT /api/boards/:id/members/:userId failed:', error);
+    res.status(500).json({ error: 'Server error while updating board member' });
+  }
+});
+
+router.delete('/:id/members/:userId', async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+    const member = await prisma.board_members.findUnique({
+      where: {
+        board_id_user_id: {
+          board_id: id,
+          user_id: userId,
+        },
+      },
+      include: {
+        users: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!member) {
+      return res.status(404).json({ error: 'Board member not found' });
+    }
+
+    if (member.role === 'OWNER') {
+      return res.status(400).json({ error: 'Cannot remove board owner' });
+    }
+
+    await prisma.board_members.delete({
+      where: {
+        board_id_user_id: {
+          board_id: id,
+          user_id: userId,
+        },
+      },
+    });
+
+    await logBoardActivity(id, `Removed ${member.users.name} from board`);
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('DELETE /api/boards/:id/members/:userId failed:', error);
+    res.status(500).json({ error: 'Server error while removing board member' });
   }
 });
 
