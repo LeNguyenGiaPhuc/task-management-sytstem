@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { FormEvent, use, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
-import { API_BASE_URL, apiFetch } from "../../api";
+import { API_BASE_URL, apiFetch, type AuthUser } from "../../api";
 
 type Priority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 type PriorityFilter = "ALL" | Priority;
 type BoardRole = "OWNER" | "ADMIN" | "MEMBER";
+type AssigneeFilter = "ALL" | "UNASSIGNED" | string;
+type DueFilter = "ALL" | "OVERDUE" | "DUE_SOON" | "NO_DUE";
 
 type User = {
   id: string;
@@ -176,6 +178,29 @@ function getPriorityClass(priority?: Priority | null) {
   if (priority === "HIGH") return "bg-amber-50 text-amber-700 ring-amber-200";
   if (priority === "LOW") return "bg-slate-100 text-slate-600 ring-slate-200";
   return "bg-blue-50 text-blue-700 ring-blue-200";
+}
+
+function getDueState(dueDate?: string | null): DueFilter | "NORMAL" {
+  if (!dueDate) return "NO_DUE";
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const due = new Date(dueDate);
+  due.setHours(0, 0, 0, 0);
+
+  const daysUntilDue = Math.ceil((due.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+
+  if (daysUntilDue < 0) return "OVERDUE";
+  if (daysUntilDue <= 3) return "DUE_SOON";
+  return "NORMAL";
+}
+
+function getDueClass(dueDate?: string | null) {
+  const state = getDueState(dueDate);
+  if (state === "OVERDUE") return "text-red-600";
+  if (state === "DUE_SOON") return "text-amber-600";
+  return "text-slate-500";
 }
 
 function TaskDetailModal({
@@ -610,6 +635,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const [boardMembers, setBoardMembers] = useState<BoardMember[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [taskComments, setTaskComments] = useState<TaskComment[]>([]);
   const [taskAttachments, setTaskAttachments] = useState<TaskAttachment[]>([]);
   const [columnTitle, setColumnTitle] = useState("");
@@ -617,6 +643,8 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("ALL");
+  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("ALL");
+  const [dueFilter, setDueFilter] = useState<DueFilter>("ALL");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTitle, setSettingsTitle] = useState("");
   const [settingsDescription, setSettingsDescription] = useState("");
@@ -641,8 +669,17 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
   const selectedTask =
     columns.flatMap((column) => column.tasks).find((task) => task.id === selectedTaskId) || null;
+  const currentMember = boardMembers.find((member) => member.user_id === currentUser?.id);
+  const currentRole = currentMember?.role || null;
+  const canManageBoard = currentRole === "OWNER" || currentRole === "ADMIN";
+  const canManageMembers = canManageBoard;
+  const canManageColumns = canManageBoard;
 
-  const isFiltering = query.trim().length > 0 || priorityFilter !== "ALL";
+  const isFiltering =
+    query.trim().length > 0 ||
+    priorityFilter !== "ALL" ||
+    assigneeFilter !== "ALL" ||
+    dueFilter !== "ALL";
   const totalTasks = getColumnTaskCount(columns);
   const urgentTasks = columns
     .flatMap((column) => column.tasks)
@@ -662,10 +699,19 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
           `${task.title} ${task.description || ""}`.toLowerCase().includes(normalizedQuery);
         const matchesPriority =
           priorityFilter === "ALL" || task.priority === priorityFilter;
-        return matchesQuery && matchesPriority;
+        const matchesAssignee =
+          assigneeFilter === "ALL" ||
+          (assigneeFilter === "UNASSIGNED" && !task.assignee_id) ||
+          task.assignee_id === assigneeFilter;
+        const dueState = getDueState(task.due_date);
+        const matchesDue =
+          dueFilter === "ALL" ||
+          dueState === dueFilter;
+
+        return matchesQuery && matchesPriority && matchesAssignee && matchesDue;
       }),
     }));
-  }, [columns, priorityFilter, query]);
+  }, [assigneeFilter, columns, dueFilter, priorityFilter, query]);
 
   const updateTaskInColumns = (updatedTask: Task) => {
     setColumns((currentColumns) =>
@@ -699,17 +745,19 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   };
 
   const fetchBoardData = useCallback(async () => {
-    const [boardResponse, usersResponse] = await Promise.all([
+    const [boardResponse, usersResponse, meResponse] = await Promise.all([
       apiFetch(`/api/boards/${id}`),
       apiFetch("/api/users"),
+      apiFetch("/api/auth/me"),
     ]);
 
-    if (!boardResponse.ok || !usersResponse.ok) {
+    if (!boardResponse.ok || !usersResponse.ok || !meResponse.ok) {
       throw new Error("Load board failed");
     }
 
     const boardData = (await boardResponse.json()) as BoardData;
     const userData = (await usersResponse.json()) as User[];
+    const meData = (await meResponse.json()) as { user: AuthUser };
 
     setBoardName(boardData.title);
     setBoardDescription(boardData.description || "");
@@ -717,6 +765,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setBoardMembers(boardData.board_members || []);
     setActivityLogs(boardData.activity_logs || []);
     setUsers(userData);
+    setCurrentUser(meData.user);
     setColumns(
       (boardData.columns || []).map((column) => ({
         ...column,
@@ -777,6 +826,10 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
   const handleCreateColumn = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageColumns) {
+      setError("Only admins and owners can manage columns.");
+      return;
+    }
 
     const title = columnTitle.trim();
     if (!title) return;
@@ -806,6 +859,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
   const handleRenameColumn = async (event: FormEvent<HTMLFormElement>, columnId: string) => {
     event.preventDefault();
+    if (!canManageColumns) {
+      setError("Only admins and owners can manage columns.");
+      return;
+    }
+
     const title = editingColumnTitle.trim();
     if (!title) return;
 
@@ -838,6 +896,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   };
 
   const handleDeleteColumn = async (columnId: string) => {
+    if (!canManageColumns) {
+      setError("Only admins and owners can manage columns.");
+      return;
+    }
+
     setDeletingColumnId(columnId);
     setError("");
 
@@ -859,6 +922,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
   const handleAddMember = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageMembers) {
+      setError("Only admins and owners can manage members.");
+      return;
+    }
+
     if (!memberUserId) return;
 
     setIsAddingMember(true);
@@ -887,6 +955,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   };
 
   const handleRemoveMember = async (userId: string) => {
+    if (!canManageMembers) {
+      setError("Only admins and owners can manage members.");
+      return;
+    }
+
     setRemovingMemberId(userId);
     setError("");
 
@@ -906,6 +979,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   };
 
   const openSettings = () => {
+    if (!canManageBoard) {
+      setError("Only admins and owners can change board settings.");
+      return;
+    }
+
     setSettingsTitle(boardName);
     setSettingsDescription(boardDescription);
     setSettingsBackground(boardBackground);
@@ -915,6 +993,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
   const handleSaveSettings = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageBoard) {
+      setError("Only admins and owners can change board settings.");
+      return;
+    }
+
     if (!settingsTitle.trim()) return;
 
     setIsSavingSettings(true);
@@ -1292,8 +1375,14 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
               <p className="mt-1 text-sm text-slate-500">
                 {columns.length} columns / {totalTasks} tasks / {urgentTasks} urgent
               </p>
+              <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                Your role
+                <span className="rounded bg-white px-2 py-0.5 text-slate-900">
+                  {currentRole || "Loading"}
+                </span>
+              </div>
             </div>
-            <div className="grid gap-2 sm:grid-cols-[260px_150px]">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[260px_150px_180px_150px]">
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -1312,13 +1401,51 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                   </option>
                 ))}
               </select>
+              <select
+                value={assigneeFilter}
+                onChange={(event) => setAssigneeFilter(event.target.value)}
+                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              >
+                <option value="ALL">All assignees</option>
+                <option value="UNASSIGNED">Unassigned</option>
+                {boardMembers.map((member) => (
+                  <option key={member.user_id} value={member.user_id}>
+                    {member.users.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={dueFilter}
+                onChange={(event) => setDueFilter(event.target.value as DueFilter)}
+                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              >
+                <option value="ALL">All due dates</option>
+                <option value="OVERDUE">Overdue</option>
+                <option value="DUE_SOON">Due soon</option>
+                <option value="NO_DUE">No due date</option>
+              </select>
               <button
                 type="button"
-                onClick={openSettings}
-                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 sm:col-span-2"
+                onClick={() => {
+                  setQuery("");
+                  setPriorityFilter("ALL");
+                  setAssigneeFilter("ALL");
+                  setDueFilter("ALL");
+                }}
+                disabled={!isFiltering}
+                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-1 xl:col-span-2"
               >
-                Board settings
+                Clear filters
               </button>
+              {canManageBoard && (
+                <button
+                  type="button"
+                  onClick={openSettings}
+                  className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 sm:col-span-1 xl:col-span-2"
+                >
+                  Board settings
+                </button>
+              )}
             </div>
           </div>
 
@@ -1352,7 +1479,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                       </p>
                       <p className="text-[10px] font-medium text-slate-500">{member.role}</p>
                     </div>
-                    {member.role !== "OWNER" && (
+                    {canManageMembers && member.role !== "OWNER" && (
                       <button
                         type="button"
                         onClick={() => handleRemoveMember(member.user_id)}
@@ -1366,40 +1493,46 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                 ))}
               </div>
 
-              <form onSubmit={handleAddMember} className="grid gap-2 sm:grid-cols-[1fr_110px_auto]">
-                <select
-                  value={memberUserId}
-                  onChange={(event) => setMemberUserId(event.target.value)}
-                  className="h-9 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                >
-                  <option value="">
-                    {availableUsers.length > 0 ? "Select user" : "No users available"}
-                  </option>
-                  {availableUsers.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.name}
+              {canManageMembers ? (
+                <form onSubmit={handleAddMember} className="grid gap-2 sm:grid-cols-[1fr_110px_auto]">
+                  <select
+                    value={memberUserId}
+                    onChange={(event) => setMemberUserId(event.target.value)}
+                    className="h-9 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  >
+                    <option value="">
+                      {availableUsers.length > 0 ? "Select user" : "No users available"}
                     </option>
-                  ))}
-                </select>
-                <select
-                  value={memberRole}
-                  onChange={(event) => setMemberRole(event.target.value as BoardRole)}
-                  className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                >
-                  {roles.map((role) => (
-                    <option key={role} value={role}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="submit"
-                  disabled={isAddingMember || !memberUserId}
-                  className="h-9 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Add
-                </button>
-              </form>
+                    {availableUsers.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={memberRole}
+                    onChange={(event) => setMemberRole(event.target.value as BoardRole)}
+                    className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  >
+                    {roles.map((role) => (
+                      <option key={role} value={role}>
+                        {role}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={isAddingMember || !memberUserId}
+                    className="h-9 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Add
+                  </button>
+                </form>
+              ) : (
+                <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500">
+                  Members can view the team, but only admins and owners can manage it.
+                </div>
+              )}
             </section>
 
             <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -1465,26 +1598,28 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                         {columns.find((item) => item.id === column.id)?.tasks.length || 0} total
                       </p>
                     </div>
-                    <div className="flex gap-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingColumnId(column.id);
-                          setEditingColumnTitle(column.title);
-                        }}
-                        className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200"
-                      >
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteColumn(column.id)}
-                        disabled={deletingColumnId === column.id}
-                        className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
-                      >
-                        Delete
-                      </button>
-                    </div>
+                    {canManageColumns && (
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingColumnId(column.id);
+                            setEditingColumnTitle(column.title);
+                          }}
+                          className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200"
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteColumn(column.id)}
+                          disabled={deletingColumnId === column.id}
+                          className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1537,7 +1672,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                                 </span>
                               )}
                               {task.due_date && (
-                                <span className="text-[11px] font-medium text-slate-500">
+                                <span className={`text-[11px] font-medium ${getDueClass(task.due_date)}`}>
                                   Due {toDateInputValue(task.due_date)}
                                 </span>
                               )}
@@ -1587,24 +1722,26 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
             </section>
           ))}
 
-          <form
-            onSubmit={handleCreateColumn}
-            className="min-w-[300px] rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
-          >
-            <input
-              value={columnTitle}
-              onChange={(event) => setColumnTitle(event.target.value)}
-              placeholder="New column name"
-              className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-            />
-            <button
-              type="submit"
-              disabled={isSavingColumn || !columnTitle.trim()}
-              className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          {canManageColumns && (
+            <form
+              onSubmit={handleCreateColumn}
+              className="min-w-[300px] rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
             >
-              {isSavingColumn ? "Creating" : "Add column"}
-            </button>
-          </form>
+              <input
+                value={columnTitle}
+                onChange={(event) => setColumnTitle(event.target.value)}
+                placeholder="New column name"
+                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              />
+              <button
+                type="submit"
+                disabled={isSavingColumn || !columnTitle.trim()}
+                className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSavingColumn ? "Creating" : "Add column"}
+              </button>
+            </form>
+          )}
         </main>
       </DragDropContext>
 
