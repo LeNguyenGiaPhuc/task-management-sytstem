@@ -1280,13 +1280,54 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       return;
     }
 
-    const { destination, source, draggableId } = result;
+    const { destination, source, draggableId, type } = result;
 
     if (!destination) return;
     if (
       destination.droppableId === source.droppableId &&
       destination.index === source.index
     ) {
+      return;
+    }
+
+    if (type === "COLUMN") {
+      if (!canManageColumns) {
+        setError("Only admins and owners can reorder columns.");
+        return;
+      }
+
+      const newColumns = Array.from(columns);
+      const [movedColumn] = newColumns.splice(source.index, 1);
+      newColumns.splice(destination.index, 0, movedColumn);
+      setColumns(newColumns);
+
+      let newOrder = 1000;
+      if (newColumns.length > 1) {
+        if (destination.index === 0) {
+          newOrder = (newColumns[1].order || 1000) / 2;
+        } else if (destination.index === newColumns.length - 1) {
+          newOrder = (newColumns[newColumns.length - 2].order || 1000) + 1000;
+        } else {
+          newOrder =
+            ((newColumns[destination.index - 1].order || 1000) +
+              (newColumns[destination.index + 1].order || 1000)) /
+            2;
+        }
+      }
+
+      try {
+        const res = await apiFetch(`/api/columns/${draggableId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ order: newOrder }),
+        });
+
+        if (!res.ok) throw new Error("Move column failed");
+        await fetchBoardData();
+      } catch {
+        setError("Could not save column position. Try again.");
+      }
+
       return;
     }
 
@@ -1564,184 +1605,203 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       </header>
 
       <DragDropContext onDragEnd={onDragEnd}>
-        <main className="mx-auto flex max-w-7xl gap-4 overflow-x-auto px-6 py-6">
-          {visibleColumns.map((column) => (
-            <section
-              key={column.id}
-              className="flex max-h-[calc(100vh-190px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-slate-50 shadow-sm"
-            >
-              <div className="border-b border-slate-200 p-3">
-                {editingColumnId === column.id ? (
-                  <form onSubmit={(event) => handleRenameColumn(event, column.id)} className="flex gap-2">
+        <main className="mx-auto max-w-7xl overflow-x-auto px-6 py-6">
+          <Droppable droppableId="board-columns" direction="horizontal" type="COLUMN">
+            {(provided) => (
+              <div ref={provided.innerRef} {...provided.droppableProps} className="flex gap-4">
+                {visibleColumns.map((column, columnIndex) => (
+                  <Draggable
+                    key={column.id}
+                    draggableId={column.id}
+                    index={columnIndex}
+                    isDragDisabled={!canManageColumns || isFiltering}
+                  >
+                    {(columnProvided, columnSnapshot) => (
+                      <section
+                        ref={columnProvided.innerRef}
+                        {...columnProvided.draggableProps}
+                        className={`flex max-h-[calc(100vh-190px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-slate-50 shadow-sm ${
+                          columnSnapshot.isDragging ? "shadow-lg ring-2 ring-slate-300" : ""
+                        }`}
+                      >
+                        <div className="border-b border-slate-200 p-3" {...columnProvided.dragHandleProps}>
+                          {editingColumnId === column.id ? (
+                            <form onSubmit={(event) => handleRenameColumn(event, column.id)} className="flex gap-2">
+                              <input
+                                value={editingColumnTitle}
+                                onChange={(event) => setEditingColumnTitle(event.target.value)}
+                                className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                                autoFocus
+                              />
+                              <button
+                                type="submit"
+                                disabled={savingColumnId === column.id || !editingColumnTitle.trim()}
+                                className="rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                              >
+                                Save
+                              </button>
+                            </form>
+                          ) : (
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <h2 className="truncate text-sm font-bold uppercase tracking-wide text-slate-700">
+                                  {column.title}
+                                </h2>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {column.tasks.length} shown /{" "}
+                                  {columns.find((item) => item.id === column.id)?.tasks.length || 0} total
+                                </p>
+                              </div>
+                              {canManageColumns && (
+                                <div className="flex gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingColumnId(column.id);
+                                      setEditingColumnTitle(column.title);
+                                    }}
+                                    className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200"
+                                  >
+                                    Rename
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteColumn(column.id)}
+                                    disabled={deletingColumnId === column.id}
+                                    className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <Droppable droppableId={column.id} type="TASK">
+                          {(provided) => (
+                            <div
+                              ref={provided.innerRef}
+                              {...provided.droppableProps}
+                              className="flex min-h-24 flex-1 flex-col gap-3 overflow-y-auto p-3"
+                            >
+                              {column.tasks.map((task, index) => (
+                                <Draggable
+                                  key={task.id}
+                                  draggableId={task.id}
+                                  index={index}
+                                  isDragDisabled={isFiltering}
+                                >
+                                  {(provided, snapshot) => (
+                                    <article
+                                      ref={provided.innerRef}
+                                      {...provided.draggableProps}
+                                      {...provided.dragHandleProps}
+                                      onClick={() => {
+                                        setTaskComments([]);
+                                        setTaskAttachments([]);
+                                        setSelectedTaskId(task.id);
+                                      }}
+                                      className={`rounded-md border border-slate-200 bg-white p-3 shadow-sm transition ${
+                                        snapshot.isDragging
+                                          ? "shadow-lg ring-2 ring-slate-300"
+                                          : "hover:border-slate-300 hover:shadow-md"
+                                      }`}
+                                    >
+                                      <p className="text-sm font-medium leading-5 text-slate-900">{task.title}</p>
+                                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                                        <span
+                                          className={`rounded px-2 py-0.5 text-[10px] font-bold ring-1 ${getPriorityClass(
+                                            task.priority
+                                          )}`}
+                                        >
+                                          {task.priority || "MEDIUM"}
+                                        </span>
+                                        {task.users && (
+                                          <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-700 text-[8px] font-bold text-white">
+                                              {getInitials(task.users.name)}
+                                            </span>
+                                            {task.users.name}
+                                          </span>
+                                        )}
+                                        {task.due_date && (
+                                          <span className={`text-[11px] font-medium ${getDueClass(task.due_date)}`}>
+                                            Due {toDateInputValue(task.due_date)}
+                                          </span>
+                                        )}
+                                        {Boolean(task.sub_tasks?.length) && (
+                                          <span className="text-[11px] font-medium text-slate-500">
+                                            {(task.sub_tasks || []).filter((item) => item.is_completed).length}/
+                                            {task.sub_tasks?.length}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </article>
+                                  )}
+                                </Draggable>
+                              ))}
+                              {column.tasks.length === 0 && (
+                                <div className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-5 text-center text-sm text-slate-400">
+                                  {isFiltering ? "No matching tasks" : "No tasks yet"}
+                                </div>
+                              )}
+                              {provided.placeholder}
+                            </div>
+                          )}
+                        </Droppable>
+
+                        <form onSubmit={(event) => handleCreateTask(event, column.id)} className="border-t border-slate-200 p-3">
+                          <div className="flex gap-2">
+                            <input
+                              value={taskTitles[column.id] || ""}
+                              onChange={(event) =>
+                                setTaskTitles((currentTitles) => ({
+                                  ...currentTitles,
+                                  [column.id]: event.target.value,
+                                }))
+                              }
+                              placeholder="Add task"
+                              className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                            />
+                            <button
+                              type="submit"
+                              disabled={savingTaskColumnId === column.id || !taskTitles[column.id]?.trim()}
+                              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </form>
+                      </section>
+                    )}
+                  </Draggable>
+                ))}
+                {provided.placeholder}
+
+                {canManageColumns && (
+                  <form
+                    onSubmit={handleCreateColumn}
+                    className="min-w-[300px] self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                  >
                     <input
-                      value={editingColumnTitle}
-                      onChange={(event) => setEditingColumnTitle(event.target.value)}
-                      className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                      autoFocus
+                      value={columnTitle}
+                      onChange={(event) => setColumnTitle(event.target.value)}
+                      placeholder="New column name"
+                      className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                     />
                     <button
                       type="submit"
-                      disabled={savingColumnId === column.id || !editingColumnTitle.trim()}
-                      className="rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                      disabled={isSavingColumn || !columnTitle.trim()}
+                      className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Save
+                      {isSavingColumn ? "Creating" : "Add column"}
                     </button>
                   </form>
-                ) : (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <h2 className="truncate text-sm font-bold uppercase tracking-wide text-slate-700">
-                        {column.title}
-                      </h2>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        {column.tasks.length} shown /{" "}
-                        {columns.find((item) => item.id === column.id)?.tasks.length || 0} total
-                      </p>
-                    </div>
-                    {canManageColumns && (
-                      <div className="flex gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingColumnId(column.id);
-                            setEditingColumnTitle(column.title);
-                          }}
-                          className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200"
-                        >
-                          Rename
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteColumn(column.id)}
-                          disabled={deletingColumnId === column.id}
-                          className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </div>
                 )}
               </div>
-
-              <Droppable droppableId={column.id}>
-                {(provided) => (
-                  <div
-                    ref={provided.innerRef}
-                    {...provided.droppableProps}
-                    className="flex min-h-24 flex-1 flex-col gap-3 overflow-y-auto p-3"
-                  >
-                    {column.tasks.map((task, index) => (
-                      <Draggable
-                        key={task.id}
-                        draggableId={task.id}
-                        index={index}
-                        isDragDisabled={isFiltering}
-                      >
-                        {(provided, snapshot) => (
-                          <article
-                            ref={provided.innerRef}
-                            {...provided.draggableProps}
-                            {...provided.dragHandleProps}
-                            onClick={() => {
-                              setTaskComments([]);
-                              setTaskAttachments([]);
-                              setSelectedTaskId(task.id);
-                            }}
-                            className={`rounded-md border border-slate-200 bg-white p-3 shadow-sm transition ${
-                              snapshot.isDragging
-                                ? "shadow-lg ring-2 ring-slate-300"
-                                : "hover:border-slate-300 hover:shadow-md"
-                            }`}
-                          >
-                            <p className="text-sm font-medium leading-5 text-slate-900">{task.title}</p>
-                            <div className="mt-3 flex flex-wrap items-center gap-2">
-                              <span
-                                className={`rounded px-2 py-0.5 text-[10px] font-bold ring-1 ${getPriorityClass(
-                                  task.priority
-                                )}`}
-                              >
-                                {task.priority || "MEDIUM"}
-                              </span>
-                              {task.users && (
-                                <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-700 text-[8px] font-bold text-white">
-                                    {getInitials(task.users.name)}
-                                  </span>
-                                  {task.users.name}
-                                </span>
-                              )}
-                              {task.due_date && (
-                                <span className={`text-[11px] font-medium ${getDueClass(task.due_date)}`}>
-                                  Due {toDateInputValue(task.due_date)}
-                                </span>
-                              )}
-                              {Boolean(task.sub_tasks?.length) && (
-                                <span className="text-[11px] font-medium text-slate-500">
-                                  {(task.sub_tasks || []).filter((item) => item.is_completed).length}/
-                                  {task.sub_tasks?.length}
-                                </span>
-                              )}
-                            </div>
-                          </article>
-                        )}
-                      </Draggable>
-                    ))}
-                    {column.tasks.length === 0 && (
-                      <div className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-5 text-center text-sm text-slate-400">
-                        {isFiltering ? "No matching tasks" : "No tasks yet"}
-                      </div>
-                    )}
-                    {provided.placeholder}
-                  </div>
-                )}
-              </Droppable>
-
-              <form onSubmit={(event) => handleCreateTask(event, column.id)} className="border-t border-slate-200 p-3">
-                <div className="flex gap-2">
-                  <input
-                    value={taskTitles[column.id] || ""}
-                    onChange={(event) =>
-                      setTaskTitles((currentTitles) => ({
-                        ...currentTitles,
-                        [column.id]: event.target.value,
-                      }))
-                    }
-                    placeholder="Add task"
-                    className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                  />
-                  <button
-                    type="submit"
-                    disabled={savingTaskColumnId === column.id || !taskTitles[column.id]?.trim()}
-                    className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Add
-                  </button>
-                </div>
-              </form>
-            </section>
-          ))}
-
-          {canManageColumns && (
-            <form
-              onSubmit={handleCreateColumn}
-              className="min-w-[300px] rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
-            >
-              <input
-                value={columnTitle}
-                onChange={(event) => setColumnTitle(event.target.value)}
-                placeholder="New column name"
-                className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              />
-              <button
-                type="submit"
-                disabled={isSavingColumn || !columnTitle.trim()}
-                className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isSavingColumn ? "Creating" : "Add column"}
-              </button>
-            </form>
-          )}
+            )}
+          </Droppable>
         </main>
       </DragDropContext>
 

@@ -44,11 +44,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title } = req.body;
-
-    if (!title || !title.trim()) {
-      return res.status(400).json({ error: 'Missing title' });
-    }
+    const { title, order } = req.body;
 
     const existingColumn = await prisma.columns.findUnique({
       where: { id },
@@ -62,16 +58,37 @@ router.put('/:id', async (req, res) => {
     const role = await requireBoardRole(req, res, existingColumn.board_id, ['ADMIN', 'OWNER']);
     if (!role) return;
 
+    const data = {};
+    if (title !== undefined) {
+      if (!title.trim()) {
+        return res.status(400).json({ error: 'Missing title' });
+      }
+      data.title = title.trim();
+    }
+    if (order !== undefined) data.order = Number(order);
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'Missing column update fields' });
+    }
+
     const updatedColumn = await prisma.columns.update({
       where: { id },
-      data: { title: title.trim() },
+      data,
     });
 
-    await logBoardActivity(
-      existingColumn.board_id,
-      `Renamed column ${existingColumn.title} to ${updatedColumn.title}`,
-      req.user.id
-    );
+    if (title !== undefined && existingColumn.title !== updatedColumn.title) {
+      await logBoardActivity(
+        existingColumn.board_id,
+        `Renamed column ${existingColumn.title} to ${updatedColumn.title}`,
+        req.user.id
+      );
+    } else if (order !== undefined) {
+      await logBoardActivity(
+        existingColumn.board_id,
+        `Reordered column ${updatedColumn.title}`,
+        req.user.id
+      );
+    }
 
     res.status(200).json(updatedColumn);
   } catch (error) {
