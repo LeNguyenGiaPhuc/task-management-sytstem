@@ -8,6 +8,39 @@ const router = express.Router();
 
 router.use(requireAuth);
 
+let ensuredProjectRoleColumn = false;
+
+async function ensureBoardMemberProjectRoleColumn() {
+  if (ensuredProjectRoleColumn) return;
+
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE board_members
+    ADD COLUMN IF NOT EXISTS project_role VARCHAR(255);
+  `);
+
+  ensuredProjectRoleColumn = true;
+}
+
+function createPlaceholderEmail(name) {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/^\.|\.$/g, '')
+    .slice(0, 32);
+  const safeSlug = slug || 'member';
+  return `${safeSlug}.${Date.now().toString(36)}@project.local`;
+}
+
+router.use(async (req, res, next) => {
+  try {
+    await ensureBoardMemberProjectRoleColumn();
+    next();
+  } catch (error) {
+    console.error('Ensure project_role column failed:', error);
+    res.status(500).json({ error: 'Server error while preparing board members' });
+  }
+});
+
 const boardSummaryInclude = {
   columns: {
     select: {
@@ -274,7 +307,7 @@ router.put('/:id', async (req, res) => {
 router.post('/:id/members', async (req, res) => {
   try {
     const { id } = req.params;
-    const { user_id, role } = req.body;
+    const { user_id, role, member_name, project_role } = req.body;
     const actorRole = await requireBoardRole(req, res, id, ['ADMIN', 'OWNER']);
     if (!actorRole) return;
 
@@ -282,23 +315,42 @@ router.post('/:id/members', async (req, res) => {
       return res.status(403).json({ error: 'Only owners can add another owner' });
     }
 
-    if (!user_id) {
-      return res.status(400).json({ error: 'Missing user_id' });
+    const memberName = cleanText(member_name);
+    const projectRole = cleanText(project_role);
+
+    if (!user_id && !memberName) {
+      return res.status(400).json({ error: 'Missing user_id or member_name' });
+    }
+
+    let memberUserId = user_id;
+    if (!memberUserId) {
+      const newUser = await prisma.users.create({
+        data: {
+          name: memberName,
+          email: createPlaceholderEmail(memberName),
+        },
+      });
+      memberUserId = newUser.id;
     }
 
     const memberRole = role || 'MEMBER';
+    const updateData = { role: memberRole };
+    if (projectRole) {
+      updateData.project_role = projectRole;
+    }
     const member = await prisma.board_members.upsert({
       where: {
         board_id_user_id: {
           board_id: id,
-          user_id,
+          user_id: memberUserId,
         },
       },
-      update: { role: memberRole },
+      update: updateData,
       create: {
         board_id: id,
-        user_id,
+        user_id: memberUserId,
         role: memberRole,
+        project_role: projectRole || null,
       },
       include: {
         users: {
@@ -312,7 +364,11 @@ router.post('/:id/members', async (req, res) => {
       },
     });
 
-    await logBoardActivity(id, `Added ${member.users.name} as ${member.role}`, req.user.id);
+    await logBoardActivity(
+      id,
+      `Added ${member.users.name} as ${member.project_role || member.role}`,
+      req.user.id
+    );
 
     res.status(201).json(member);
   } catch (error) {

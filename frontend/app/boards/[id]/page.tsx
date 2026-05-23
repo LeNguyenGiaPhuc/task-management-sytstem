@@ -21,6 +21,7 @@ type BoardMember = {
   board_id: string;
   user_id: string;
   role?: BoardRole | null;
+  project_role?: string | null;
   joined_at?: string | null;
   users: User;
 };
@@ -94,7 +95,21 @@ type TaskUpdate = {
 };
 
 const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
-const roles: BoardRole[] = ["ADMIN", "MEMBER"];
+const projectRoles = [
+  "Product Manager",
+  "Project Manager",
+  "Scrum Master",
+  "Business Analyst (BA)",
+  "UI/UX Designer",
+  "Frontend Developer",
+  "Backend Developer",
+  "Mobile Developer",
+  "Fullstack Developer",
+  "QA / Tester",
+  "DevOps Engineer",
+  "Tech Lead / Team Lead",
+  "Client / Customer",
+];
 
 function normalizeTask(task: Task): Task {
   return {
@@ -640,8 +655,8 @@ export function BoardWorkspace({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTitle, setSettingsTitle] = useState("");
   const [settingsDescription, setSettingsDescription] = useState("");
-  const [memberUserId, setMemberUserId] = useState("");
-  const [memberRole, setMemberRole] = useState<BoardRole>("MEMBER");
+  const [memberName, setMemberName] = useState("");
+  const [memberProjectRole, setMemberProjectRole] = useState("");
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingColumnTitle, setEditingColumnTitle] = useState("");
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
@@ -675,10 +690,6 @@ export function BoardWorkspace({
   const urgentTasks = columns
     .flatMap((column) => column.tasks)
     .filter((task) => task.priority === "URGENT").length;
-  const availableUsers = users.filter(
-    (user) => !boardMembers.some((member) => member.user_id === user.id)
-  );
-
   const visibleColumns = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
@@ -917,7 +928,8 @@ export function BoardWorkspace({
       return;
     }
 
-    if (!memberUserId) return;
+    const trimmedName = memberName.trim();
+    if (!trimmedName || !memberProjectRole) return;
 
     setIsAddingMember(true);
     setError("");
@@ -927,15 +939,15 @@ export function BoardWorkspace({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: memberUserId,
-          role: memberRole,
+          member_name: trimmedName,
+          project_role: memberProjectRole,
         }),
       });
 
       if (!res.ok) throw new Error("Add member failed");
 
-      setMemberUserId("");
-      setMemberRole("MEMBER");
+      setMemberName("");
+      setMemberProjectRole("");
       await fetchBoardData();
     } catch {
       setError("Could not add member. Try again.");
@@ -1527,7 +1539,9 @@ export function BoardWorkspace({
                       <p className={`max-w-32 truncate text-xs font-semibold ${embedded ? "text-slate-900" : "text-slate-900"}`}>
                         {member.users.name}
                       </p>
-                      <p className={`text-[10px] font-medium ${embedded ? "text-slate-500" : "text-slate-500"}`}>{member.role}</p>
+                      <p className={`text-[10px] font-medium ${embedded ? "text-slate-500" : "text-slate-500"}`}>
+                        {member.project_role || member.role}
+                      </p>
                     </div>
                     {canManageMembers && member.role !== "OWNER" && (
                       <button
@@ -1544,27 +1558,20 @@ export function BoardWorkspace({
               </div>
 
               {canManageMembers ? (
-                <form onSubmit={handleAddMember} className="grid gap-2 sm:grid-cols-[1fr_110px_auto]">
-                  <select
-                    value={memberUserId}
-                    onChange={(event) => setMemberUserId(event.target.value)}
+                <form onSubmit={handleAddMember} className="grid gap-2 sm:grid-cols-[1fr_1fr_140px]">
+                  <input
+                    value={memberName}
+                    onChange={(event) => setMemberName(event.target.value)}
+                    placeholder="Member name"
                     className={`${inputClass} h-9 min-w-0 px-2`}
-                  >
-                    <option value="">
-                      {availableUsers.length > 0 ? "Select user" : "No users available"}
-                    </option>
-                    {availableUsers.map((user) => (
-                      <option key={user.id} value={user.id}>
-                        {user.name}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <select
-                    value={memberRole}
-                    onChange={(event) => setMemberRole(event.target.value as BoardRole)}
+                    value={memberProjectRole}
+                    onChange={(event) => setMemberProjectRole(event.target.value)}
                     className={`${inputClass} h-9 px-2`}
                   >
-                    {roles.map((role) => (
+                    <option value="">Select project role</option>
+                    {projectRoles.map((role) => (
                       <option key={role} value={role}>
                         {role}
                       </option>
@@ -1572,8 +1579,8 @@ export function BoardWorkspace({
                   </select>
                   <button
                     type="submit"
-                    disabled={isAddingMember || !memberUserId}
-                    className="h-9 rounded-md bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isAddingMember || !memberName.trim() || !memberProjectRole}
+                    className="h-9 rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Add
                   </button>
