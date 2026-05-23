@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, use, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { API_BASE_URL, apiFetch, type AuthUser } from "../../api";
@@ -26,12 +25,6 @@ type BoardMember = {
   users: User;
 };
 
-type ActivityLog = {
-  id: string;
-  action_text: string;
-  created_at?: string | null;
-  users?: Pick<User, "id" | "email" | "name" | "avatar_url"> | null;
-};
 
 type TaskComment = {
   id: string;
@@ -87,7 +80,6 @@ type BoardData = {
   description?: string | null;
   background?: string | null;
   board_members?: BoardMember[];
-  activity_logs?: ActivityLog[];
   columns?: Column[];
 };
 
@@ -162,11 +154,6 @@ function mixWithWhite(value: string, amount = 0.88) {
 function getBoardPageBackground(value: string) {
   if (!value) return "#f1f5f9";
   return mixWithWhite(value, 0.9);
-}
-
-function getBoardAccent(value: string) {
-  if (!value) return "#cbd5e1";
-  return mixWithWhite(value, 0.55);
 }
 
 function getColumnTaskCount(columns: Column[]) {
@@ -625,15 +612,20 @@ function TaskDetailModal({
   );
 }
 
-export default function BoardDetail({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+type BoardWorkspaceProps = {
+  id: string;
+  embedded?: boolean;
+};
 
+export function BoardWorkspace({
+  id,
+  embedded = false,
+}: BoardWorkspaceProps) {
   const [boardName, setBoardName] = useState("Loading...");
   const [boardDescription, setBoardDescription] = useState("");
   const [boardBackground, setBoardBackground] = useState("");
   const [columns, setColumns] = useState<Column[]>([]);
   const [boardMembers, setBoardMembers] = useState<BoardMember[]>([]);
-  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [taskComments, setTaskComments] = useState<TaskComment[]>([]);
@@ -648,7 +640,6 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTitle, setSettingsTitle] = useState("");
   const [settingsDescription, setSettingsDescription] = useState("");
-  const [settingsBackground, setSettingsBackground] = useState("");
   const [memberUserId, setMemberUserId] = useState("");
   const [memberRole, setMemberRole] = useState<BoardRole>("MEMBER");
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
@@ -763,7 +754,6 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     setBoardDescription(boardData.description || "");
     setBoardBackground(boardData.background || "");
     setBoardMembers(boardData.board_members || []);
-    setActivityLogs(boardData.activity_logs || []);
     setUsers(userData);
     setCurrentUser(meData.user);
     setColumns(
@@ -986,7 +976,6 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
 
     setSettingsTitle(boardName);
     setSettingsDescription(boardDescription);
-    setSettingsBackground(boardBackground);
     setIsSettingsOpen(true);
     setError("");
   };
@@ -1010,7 +999,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
         body: JSON.stringify({
           title: settingsTitle.trim(),
           description: settingsDescription.trim() || null,
-          background: settingsBackground.trim() || null,
+          background: boardBackground || null,
         }),
       });
 
@@ -1388,37 +1377,57 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
     }
   };
 
+  const pageBackground = embedded ? "#f6f8fb" : getBoardPageBackground(boardBackground);
+  const headerClass = embedded
+    ? "border-b border-slate-200 bg-white px-6 py-5"
+    : "border-b border-slate-200 bg-white px-6 py-5";
+  const inputClass = embedded
+    ? "h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+    : "h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+  const smallInputClass = embedded
+    ? "min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+    : "min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+  const panelClass = embedded
+    ? "rounded-lg border border-slate-200 bg-white p-3"
+    : "rounded-lg border border-slate-200 bg-slate-50 p-3";
+  const innerCardClass = embedded
+    ? "rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
+    : "rounded-md border border-slate-200 bg-white px-3 py-2";
+  const columnClass = embedded
+    ? "flex max-h-[calc(100vh-190px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-white shadow-sm"
+    : "flex max-h-[calc(100vh-190px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-slate-50 shadow-sm";
+  const taskCardClass = embedded
+    ? "rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300"
+    : "rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300 hover:shadow-md";
+  const addColumnClass = embedded
+    ? "min-w-[300px] self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+    : "min-w-[300px] self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm";
+
   if (!isBrowser) return null;
 
   return (
     <div
-      className="min-h-screen text-slate-900"
-      style={{ backgroundColor: getBoardPageBackground(boardBackground) }}
+      className={`${embedded ? "embedded-board-light min-h-full" : "min-h-screen"} text-slate-900`}
+      style={{ backgroundColor: pageBackground }}
     >
-      <header className="border-b border-slate-200 bg-white px-6 py-5">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4">
-          <div
-            className="h-1.5 rounded-full"
-            style={{ backgroundColor: getBoardAccent(boardBackground) }}
-          />
+      <header className={headerClass}>
+        <div className={`${embedded ? "w-full" : "mx-auto max-w-7xl"} flex flex-col gap-4`}>
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
             <div>
-              <Link
-                href="/"
-                className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
-              >
-                Back to workspaces
-              </Link>
-              <h1 className="mt-1 text-2xl font-bold text-slate-950">{boardName}</h1>
+              <h1 className={`text-2xl font-bold ${embedded ? "text-slate-900" : "text-slate-950"}`}>{boardName}</h1>
               {boardDescription && (
-                <p className="mt-1 max-w-2xl text-sm text-slate-600">{boardDescription}</p>
+                <p className={`mt-1 max-w-2xl text-sm ${embedded ? "text-slate-600" : "text-slate-600"}`}>{boardDescription}</p>
               )}
-              <p className="mt-1 text-sm text-slate-500">
+              <p className={`mt-1 text-sm ${embedded ? "text-slate-500" : "text-slate-500"}`}>
                 {columns.length} columns / {totalTasks} tasks / {urgentTasks} urgent
               </p>
-              <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+              <div className={`mt-2 inline-flex items-center gap-2 rounded-md px-2.5 py-1 text-xs font-semibold ${
+                embedded
+                  ? "border border-slate-200 bg-slate-50 text-slate-600"
+                  : "border border-slate-200 bg-slate-50 text-slate-600"
+              }`}>
                 Your role
-                <span className="rounded bg-white px-2 py-0.5 text-slate-900">
+                <span className={`rounded px-2 py-0.5 ${embedded ? "bg-white text-slate-900" : "bg-white text-slate-900"}`}>
                   {currentRole || "Loading"}
                 </span>
               </div>
@@ -1428,12 +1437,12 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search tasks"
-                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className={inputClass}
               />
               <select
                 value={priorityFilter}
                 onChange={(event) => setPriorityFilter(event.target.value as PriorityFilter)}
-                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className={inputClass}
               >
                 <option value="ALL">All priorities</option>
                 {priorities.map((item) => (
@@ -1445,7 +1454,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
               <select
                 value={assigneeFilter}
                 onChange={(event) => setAssigneeFilter(event.target.value)}
-                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className={inputClass}
               >
                 <option value="ALL">All assignees</option>
                 <option value="UNASSIGNED">Unassigned</option>
@@ -1458,7 +1467,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
               <select
                 value={dueFilter}
                 onChange={(event) => setDueFilter(event.target.value as DueFilter)}
-                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className={inputClass}
               >
                 <option value="ALL">All due dates</option>
                 <option value="OVERDUE">Overdue</option>
@@ -1474,7 +1483,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                   setDueFilter("ALL");
                 }}
                 disabled={!isFiltering}
-                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-1 xl:col-span-2"
+                className={`${inputClass} font-medium text-slate-600 border-slate-300 bg-slate-50 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-1 xl:col-span-2`}
               >
                 Clear filters
               </button>
@@ -1482,7 +1491,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                 <button
                   type="button"
                   onClick={openSettings}
-                  className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 sm:col-span-1 xl:col-span-2"
+                  className="h-10 rounded-md bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-500 sm:col-span-1 xl:col-span-2"
                 >
                   Board settings
                 </button>
@@ -1496,12 +1505,12 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
             </div>
           )}
 
-          <div className="grid gap-3 lg:grid-cols-[1fr_1.2fr]">
-            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="grid gap-3 lg:grid-cols-1">
+            <section className={panelClass}>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-sm font-bold text-slate-900">Team</h2>
-                  <p className="text-xs text-slate-500">{boardMembers.length} members</p>
+                  <h2 className={`text-sm font-bold ${embedded ? "text-slate-900" : "text-slate-900"}`}>Team</h2>
+                  <p className={`text-xs ${embedded ? "text-slate-500" : "text-slate-500"}`}>{boardMembers.length} members</p>
                 </div>
               </div>
 
@@ -1509,16 +1518,16 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                 {boardMembers.map((member) => (
                   <div
                     key={member.user_id}
-                    className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5"
+                    className={`flex items-center gap-2 ${innerCardClass.replace("px-3 py-2", "px-2 py-1.5")}`}
                   >
                     <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-[10px] font-bold text-white">
                       {getInitials(member.users.name)}
                     </div>
                     <div className="min-w-0">
-                      <p className="max-w-32 truncate text-xs font-semibold text-slate-900">
+                      <p className={`max-w-32 truncate text-xs font-semibold ${embedded ? "text-slate-900" : "text-slate-900"}`}>
                         {member.users.name}
                       </p>
-                      <p className="text-[10px] font-medium text-slate-500">{member.role}</p>
+                      <p className={`text-[10px] font-medium ${embedded ? "text-slate-500" : "text-slate-500"}`}>{member.role}</p>
                     </div>
                     {canManageMembers && member.role !== "OWNER" && (
                       <button
@@ -1539,7 +1548,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                   <select
                     value={memberUserId}
                     onChange={(event) => setMemberUserId(event.target.value)}
-                    className="h-9 min-w-0 rounded-md border border-slate-300 bg-white px-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    className={`${inputClass} h-9 min-w-0 px-2`}
                   >
                     <option value="">
                       {availableUsers.length > 0 ? "Select user" : "No users available"}
@@ -1553,7 +1562,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                   <select
                     value={memberRole}
                     onChange={(event) => setMemberRole(event.target.value as BoardRole)}
-                    className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    className={`${inputClass} h-9 px-2`}
                   >
                     {roles.map((role) => (
                       <option key={role} value={role}>
@@ -1564,7 +1573,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                   <button
                     type="submit"
                     disabled={isAddingMember || !memberUserId}
-                    className="h-9 rounded-md bg-slate-900 px-3 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-9 rounded-md bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Add
                   </button>
@@ -1575,37 +1584,12 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                 </div>
               )}
             </section>
-
-            <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">Recent activity</h2>
-                  <p className="text-xs text-slate-500">Latest board changes</p>
-                </div>
-              </div>
-              <div className="grid max-h-32 gap-2 overflow-y-auto">
-                {activityLogs.length > 0 ? (
-                  activityLogs.map((log) => (
-                    <div key={log.id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
-                      <p className="text-xs font-medium text-slate-800">{log.action_text}</p>
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        {log.users?.name || "System"} / {formatDateTime(log.created_at)}
-                      </p>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-5 text-center text-sm text-slate-400">
-                    No activity yet
-                  </div>
-                )}
-              </div>
-            </section>
           </div>
         </div>
       </header>
 
       <DragDropContext onDragEnd={onDragEnd}>
-        <main className="mx-auto max-w-7xl overflow-x-auto px-6 py-6">
+        <main className={`${embedded ? "w-full" : "mx-auto max-w-7xl"} overflow-x-auto px-6 py-6`}>
           <Droppable droppableId="board-columns" direction="horizontal" type="COLUMN">
             {(provided) => (
               <div ref={provided.innerRef} {...provided.droppableProps} className="flex gap-4">
@@ -1620,23 +1604,23 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                       <section
                         ref={columnProvided.innerRef}
                         {...columnProvided.draggableProps}
-                        className={`flex max-h-[calc(100vh-190px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-slate-50 shadow-sm ${
+                        className={`${columnClass} ${
                           columnSnapshot.isDragging ? "shadow-lg ring-2 ring-slate-300" : ""
                         }`}
                       >
-                        <div className="border-b border-slate-200 p-3" {...columnProvided.dragHandleProps}>
+                        <div className={`border-b p-3 ${embedded ? "border-slate-200" : "border-slate-200"}`} {...columnProvided.dragHandleProps}>
                           {editingColumnId === column.id ? (
                             <form onSubmit={(event) => handleRenameColumn(event, column.id)} className="flex gap-2">
                               <input
                                 value={editingColumnTitle}
                                 onChange={(event) => setEditingColumnTitle(event.target.value)}
-                                className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                                className={smallInputClass}
                                 autoFocus
                               />
                               <button
                                 type="submit"
                                 disabled={savingColumnId === column.id || !editingColumnTitle.trim()}
-                                className="rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                                className="rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50"
                               >
                                 Save
                               </button>
@@ -1644,10 +1628,10 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                           ) : (
                             <div className="flex items-center justify-between gap-3">
                               <div className="min-w-0">
-                                <h2 className="truncate text-sm font-bold uppercase tracking-wide text-slate-700">
+                                <h2 className={`truncate text-sm font-bold uppercase tracking-wide ${embedded ? "text-slate-700" : "text-slate-700"}`}>
                                   {column.title}
                                 </h2>
-                                <p className="mt-0.5 text-xs text-slate-500">
+                                <p className={`mt-0.5 text-xs ${embedded ? "text-slate-500" : "text-slate-500"}`}>
                                   {column.tasks.length} shown /{" "}
                                   {columns.find((item) => item.id === column.id)?.tasks.length || 0} total
                                 </p>
@@ -1660,7 +1644,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                                       setEditingColumnId(column.id);
                                       setEditingColumnTitle(column.title);
                                     }}
-                                    className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-200"
+                                    className="rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50"
                                   >
                                     Rename
                                   </button>
@@ -1700,15 +1684,15 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                                       onClick={() => {
                                         setTaskComments([]);
                                         setTaskAttachments([]);
-                                        setSelectedTaskId(task.id);
+                                      setSelectedTaskId(task.id);
                                       }}
-                                      className={`rounded-md border border-slate-200 bg-white p-3 shadow-sm transition ${
+                                      className={`${taskCardClass} ${
                                         snapshot.isDragging
                                           ? "shadow-lg ring-2 ring-slate-300"
-                                          : "hover:border-slate-300 hover:shadow-md"
+                                          : ""
                                       }`}
                                     >
-                                      <p className="text-sm font-medium leading-5 text-slate-900">{task.title}</p>
+                                      <p className={`text-sm font-medium leading-5 ${embedded ? "text-slate-900" : "text-slate-900"}`}>{task.title}</p>
                                       <div className="mt-3 flex flex-wrap items-center gap-2">
                                         <span
                                           className={`rounded px-2 py-0.5 text-[10px] font-bold ring-1 ${getPriorityClass(
@@ -1742,7 +1726,11 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                                 </Draggable>
                               ))}
                               {column.tasks.length === 0 && (
-                                <div className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-5 text-center text-sm text-slate-400">
+                                <div className={`rounded-md border border-dashed px-3 py-5 text-center text-sm ${
+                                  embedded
+                                    ? "border-slate-200 bg-white text-slate-500"
+                                    : "border-slate-300 bg-white text-slate-400"
+                                }`}>
                                   {isFiltering ? "No matching tasks" : "No tasks yet"}
                                 </div>
                               )}
@@ -1751,7 +1739,7 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                           )}
                         </Droppable>
 
-                        <form onSubmit={(event) => handleCreateTask(event, column.id)} className="border-t border-slate-200 p-3">
+                        <form onSubmit={(event) => handleCreateTask(event, column.id)} className={`border-t p-3 ${embedded ? "border-slate-200" : "border-slate-200"}`}>
                           <div className="flex gap-2">
                             <input
                               value={taskTitles[column.id] || ""}
@@ -1762,12 +1750,12 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                                 }))
                               }
                               placeholder="Add task"
-                              className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                              className={smallInputClass}
                             />
                             <button
                               type="submit"
                               disabled={savingTaskColumnId === column.id || !taskTitles[column.id]?.trim()}
-                              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                              className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               Add
                             </button>
@@ -1782,18 +1770,18 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
                 {canManageColumns && (
                   <form
                     onSubmit={handleCreateColumn}
-                    className="min-w-[300px] self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                    className={addColumnClass}
                   >
                     <input
                       value={columnTitle}
                       onChange={(event) => setColumnTitle(event.target.value)}
                       placeholder="New column name"
-                      className="mb-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                      className={`mb-3 w-full ${inputClass}`}
                     />
                     <button
                       type="submit"
                       disabled={isSavingColumn || !columnTitle.trim()}
-                      className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isSavingColumn ? "Creating" : "Add column"}
                     </button>
@@ -1846,38 +1834,6 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
               />
             </label>
 
-            <label className="mb-5 block">
-              <span className="mb-1 block text-sm font-medium text-slate-700">Background color</span>
-              <div className="flex items-center gap-3 rounded-md border border-slate-300 px-3 py-2">
-                <input
-                  type="color"
-                  value={getColorValue(settingsBackground)}
-                  onChange={(event) => setSettingsBackground(event.target.value)}
-                  className="h-9 w-12 cursor-pointer rounded border border-slate-200 bg-white"
-                />
-                <input
-                  value={settingsBackground}
-                  onChange={(event) => setSettingsBackground(event.target.value)}
-                  placeholder="#f8fafc"
-                  className="min-w-0 flex-1 text-sm outline-none"
-                />
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {["#f8fafc", "#e2e8f0", "#dbeafe", "#ccfbf1", "#dcfce7", "#fef3c7"].map(
-                  (color) => (
-                    <button
-                      key={color}
-                      type="button"
-                      onClick={() => setSettingsBackground(color)}
-                      className="h-7 w-10 rounded-md border border-slate-300 ring-offset-2 hover:ring-2 hover:ring-slate-300"
-                      style={{ backgroundColor: color }}
-                      aria-label={`Set background ${color}`}
-                    />
-                  )
-                )}
-              </div>
-            </label>
-
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -1924,4 +1880,10 @@ export default function BoardDetail({ params }: { params: Promise<{ id: string }
       )}
     </div>
   );
+}
+
+export default function BoardDetail({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+
+  return <BoardWorkspace id={id} />;
 }

@@ -1,6 +1,16 @@
 @import "tailwindcss";
 
+:root {
+  --font-sans: Arial, Helvetica, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
 body {
   background-color: #f3f4f6;
   color: #1f2937;
+  font-family: var(--font-sans);
+}
+
+.embedded-board-light {
+  color: #0f172a;
 }
