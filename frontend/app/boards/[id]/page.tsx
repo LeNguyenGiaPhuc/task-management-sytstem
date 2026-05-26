@@ -175,6 +175,13 @@ function getColumnTaskCount(columns: Column[]) {
   return columns.reduce((total, column) => total + column.tasks.length, 0);
 }
 
+function isDoneColumn(title: string) {
+  const normalizedTitle = title.trim().toLowerCase();
+  return ["done", "completed", "finished", "closed"].some((keyword) =>
+    normalizedTitle.includes(keyword)
+  );
+}
+
 function getPriorityClass(priority?: Priority | null) {
   if (priority === "URGENT") return "bg-red-50 text-red-700 ring-red-200";
   if (priority === "HIGH") return "bg-amber-50 text-amber-700 ring-amber-200";
@@ -641,7 +648,6 @@ export function BoardWorkspace({
   const [boardBackground, setBoardBackground] = useState("");
   const [columns, setColumns] = useState<Column[]>([]);
   const [boardMembers, setBoardMembers] = useState<BoardMember[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [taskComments, setTaskComments] = useState<TaskComment[]>([]);
   const [taskAttachments, setTaskAttachments] = useState<TaskAttachment[]>([]);
@@ -687,9 +693,37 @@ export function BoardWorkspace({
     assigneeFilter !== "ALL" ||
     dueFilter !== "ALL";
   const totalTasks = getColumnTaskCount(columns);
-  const urgentTasks = columns
-    .flatMap((column) => column.tasks)
-    .filter((task) => task.priority === "URGENT").length;
+  const allTasks = useMemo(() => columns.flatMap((column) => column.tasks), [columns]);
+  const doneTasks = columns
+    .filter((column) => isDoneColumn(column.title))
+    .reduce((total, column) => total + column.tasks.length, 0);
+  const openTasks = Math.max(totalTasks - doneTasks, 0);
+  const completionRate = totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0;
+  const urgentTasks = allTasks.filter((task) => task.priority === "URGENT").length;
+  const highPriorityTasks = allTasks.filter(
+    (task) => task.priority === "HIGH" || task.priority === "URGENT"
+  ).length;
+  const overdueTasks = allTasks.filter((task) => getDueState(task.due_date) === "OVERDUE").length;
+  const dueSoonTasks = allTasks.filter((task) => getDueState(task.due_date) === "DUE_SOON").length;
+  const unassignedTasks = allTasks.filter((task) => !task.assignee_id).length;
+  const totalChecklistItems = allTasks.reduce(
+    (total, task) => total + (task.sub_tasks?.length || 0),
+    0
+  );
+  const completedChecklistItems = allTasks.reduce(
+    (total, task) =>
+      total + (task.sub_tasks || []).filter((subTask) => subTask.is_completed).length,
+    0
+  );
+  const checklistRate = totalChecklistItems
+    ? Math.round((completedChecklistItems / totalChecklistItems) * 100)
+    : 0;
+  const boardHealth =
+    overdueTasks > 0
+      ? { label: "Needs attention", className: "bg-red-50 text-red-700 ring-red-200" }
+      : urgentTasks > 0
+        ? { label: "High priority", className: "bg-amber-50 text-amber-700 ring-amber-200" }
+        : { label: "On track", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" };
   const visibleColumns = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
@@ -747,25 +781,22 @@ export function BoardWorkspace({
   };
 
   const fetchBoardData = useCallback(async () => {
-    const [boardResponse, usersResponse, meResponse] = await Promise.all([
+    const [boardResponse, meResponse] = await Promise.all([
       apiFetch(`/api/boards/${id}`),
-      apiFetch("/api/users"),
       apiFetch("/api/auth/me"),
     ]);
 
-    if (!boardResponse.ok || !usersResponse.ok || !meResponse.ok) {
+    if (!boardResponse.ok || !meResponse.ok) {
       throw new Error("Load board failed");
     }
 
     const boardData = (await boardResponse.json()) as BoardData;
-    const userData = (await usersResponse.json()) as User[];
     const meData = (await meResponse.json()) as { user: AuthUser };
 
     setBoardName(boardData.title);
     setBoardDescription(boardData.description || "");
     setBoardBackground(boardData.background || "");
     setBoardMembers(boardData.board_members || []);
-    setUsers(userData);
     setCurrentUser(meData.user);
     setColumns(
       (boardData.columns || []).map((column) => ({
@@ -1391,29 +1422,50 @@ export function BoardWorkspace({
 
   const pageBackground = embedded ? "#f6f8fb" : getBoardPageBackground(boardBackground);
   const headerClass = embedded
-    ? "border-b border-slate-200 bg-white px-6 py-5"
-    : "border-b border-slate-200 bg-white px-6 py-5";
+    ? "border-b border-slate-200 bg-white px-6 py-3"
+    : "border-b border-slate-200 bg-white px-6 py-3";
   const inputClass = embedded
-    ? "h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-    : "h-10 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+    ? "h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+    : "h-9 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
   const smallInputClass = embedded
     ? "min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
     : "min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
-  const panelClass = embedded
-    ? "rounded-lg border border-slate-200 bg-white p-3"
-    : "rounded-lg border border-slate-200 bg-slate-50 p-3";
   const innerCardClass = embedded
     ? "rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
     : "rounded-md border border-slate-200 bg-white px-3 py-2";
   const columnClass = embedded
-    ? "flex max-h-[calc(100vh-190px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-white shadow-sm"
-    : "flex max-h-[calc(100vh-190px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-slate-50 shadow-sm";
+    ? "flex max-h-[calc(100vh-140px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-white shadow-sm"
+    : "flex max-h-[calc(100vh-140px)] min-w-[300px] flex-col rounded-lg border border-slate-200 bg-slate-50 shadow-sm";
   const taskCardClass = embedded
     ? "rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300"
     : "rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300 hover:shadow-md";
   const addColumnClass = embedded
     ? "min-w-[300px] self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
     : "min-w-[300px] self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm";
+  const summaryCards = [
+    {
+      label: "Open tasks",
+      value: openTasks,
+      detail: `${doneTasks} done`,
+    },
+    {
+      label: "Completion",
+      value: `${completionRate}%`,
+      detail: `${checklistRate}% checklist progress`,
+    },
+    {
+      label: "Due risk",
+      value: overdueTasks,
+      detail: `${dueSoonTasks} due soon`,
+      tone: overdueTasks > 0 ? "text-red-600" : "text-slate-900",
+    },
+    {
+      label: "Priority load",
+      value: highPriorityTasks,
+      detail: `${urgentTasks} urgent / ${unassignedTasks} unassigned`,
+      tone: urgentTasks > 0 ? "text-amber-600" : "text-slate-900",
+    },
+  ];
 
   if (!isBrowser) return null;
 
@@ -1423,17 +1475,17 @@ export function BoardWorkspace({
       style={{ backgroundColor: pageBackground }}
     >
       <header className={headerClass}>
-        <div className={`${embedded ? "w-full" : "mx-auto max-w-7xl"} flex flex-col gap-4`}>
-          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+        <div className={`${embedded ? "w-full" : "mx-auto max-w-7xl"} flex flex-col gap-3`}>
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
             <div>
-              <h1 className={`text-2xl font-bold ${embedded ? "text-slate-900" : "text-slate-950"}`}>{boardName}</h1>
+              <h1 className={`text-xl font-bold ${embedded ? "text-slate-900" : "text-slate-950"}`}>{boardName}</h1>
               {boardDescription && (
-                <p className={`mt-1 max-w-2xl text-sm ${embedded ? "text-slate-600" : "text-slate-600"}`}>{boardDescription}</p>
+                <p className={`mt-0.5 max-w-2xl text-xs ${embedded ? "text-slate-600" : "text-slate-600"}`}>{boardDescription}</p>
               )}
-              <p className={`mt-1 text-sm ${embedded ? "text-slate-500" : "text-slate-500"}`}>
+              <p className={`mt-0.5 text-xs ${embedded ? "text-slate-500" : "text-slate-500"}`}>
                 {columns.length} columns / {totalTasks} tasks / {urgentTasks} urgent
               </p>
-              <div className={`mt-2 inline-flex items-center gap-2 rounded-md px-2.5 py-1 text-xs font-semibold ${
+              <div className={`mt-1 inline-flex items-center gap-2 rounded-md px-2 py-0.5 text-xs font-semibold ${
                 embedded
                   ? "border border-slate-200 bg-slate-50 text-slate-600"
                   : "border border-slate-200 bg-slate-50 text-slate-600"
@@ -1503,7 +1555,7 @@ export function BoardWorkspace({
                 <button
                   type="button"
                   onClick={openSettings}
-                  className="h-10 rounded-md bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-500 sm:col-span-1 xl:col-span-2"
+                  className="h-9 rounded-md bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-500 sm:col-span-1 xl:col-span-2"
                 >
                   Board settings
                 </button>
@@ -1517,16 +1569,42 @@ export function BoardWorkspace({
             </div>
           )}
 
+          <section className="rounded-lg border border-slate-200 bg-white p-2">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">Summary</h2>
+              <span className={`w-fit rounded px-2 py-0.5 text-xs font-bold ring-1 ${boardHealth.className}`}>
+                {boardHealth.label}
+              </span>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+              {summaryCards.map((card) => (
+                <div
+                  key={card.label}
+                  className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium text-slate-500">{card.label}</p>
+                    <p className="truncate text-xs text-slate-500">{card.detail}</p>
+                  </div>
+                  <p className={`shrink-0 text-lg font-bold ${card.tone || "text-slate-900"}`}>
+                    {card.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+
           <div className="grid gap-3 lg:grid-cols-1">
-            <section className={panelClass}>
-              <div className="mb-3 flex items-center justify-between gap-3">
+            <section className="rounded-lg border border-slate-200 bg-white p-2">
+              <div className="mb-2 flex items-center justify-between gap-3">
                 <div>
-                  <h2 className={`text-sm font-bold ${embedded ? "text-slate-900" : "text-slate-900"}`}>Team</h2>
+                  <h2 className={`text-xs font-bold uppercase tracking-wide ${embedded ? "text-slate-500" : "text-slate-500"}`}>Team</h2>
                   <p className={`text-xs ${embedded ? "text-slate-500" : "text-slate-500"}`}>{boardMembers.length} members</p>
                 </div>
               </div>
 
-              <div className="mb-3 flex flex-wrap gap-2">
+              <div className="mb-2 flex flex-wrap gap-2">
                 {boardMembers.map((member) => (
                   <div
                     key={member.user_id}
@@ -1596,7 +1674,7 @@ export function BoardWorkspace({
       </header>
 
       <DragDropContext onDragEnd={onDragEnd}>
-        <main className={`${embedded ? "w-full" : "mx-auto max-w-7xl"} overflow-x-auto px-6 py-6`}>
+        <main className={`${embedded ? "w-full" : "mx-auto max-w-7xl"} overflow-x-auto px-6 py-4`}>
           <Droppable droppableId="board-columns" direction="horizontal" type="COLUMN">
             {(provided) => (
               <div ref={provided.innerRef} {...provided.droppableProps} className="flex gap-4">
