@@ -380,12 +380,44 @@ router.post('/:id/members', async (req, res) => {
 router.put('/:id/members/:userId', async (req, res) => {
   try {
     const { id, userId } = req.params;
-    const { role } = req.body;
+    const { role, project_role } = req.body;
     const actorRole = await requireBoardRole(req, res, id, ['OWNER']);
     if (!actorRole) return;
 
-    if (!role) {
-      return res.status(400).json({ error: 'Missing role' });
+    if (role !== undefined && !['ADMIN', 'MEMBER'].includes(role)) {
+      return res.status(400).json({ error: 'Role must be ADMIN or MEMBER' });
+    }
+
+    const existingMember = await prisma.board_members.findUnique({
+      where: {
+        board_id_user_id: {
+          board_id: id,
+          user_id: userId,
+        },
+      },
+      include: {
+        users: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!existingMember) {
+      return res.status(404).json({ error: 'Board member not found' });
+    }
+
+    if (existingMember.role === 'OWNER') {
+      return res.status(400).json({ error: 'Cannot edit board owner membership' });
+    }
+
+    const data = {};
+    if (role !== undefined) data.role = role;
+    if (project_role !== undefined) data.project_role = cleanText(project_role);
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'Missing member update fields' });
     }
 
     const member = await prisma.board_members.update({
@@ -395,7 +427,7 @@ router.put('/:id/members/:userId', async (req, res) => {
           user_id: userId,
         },
       },
-      data: { role },
+      data,
       include: {
         users: {
           select: {
@@ -408,7 +440,21 @@ router.put('/:id/members/:userId', async (req, res) => {
       },
     });
 
-    await logBoardActivity(id, `Changed ${member.users.name} role to ${member.role}`, req.user.id);
+    const activityParts = [];
+    if (role !== undefined && role !== existingMember.role) {
+      activityParts.push(`role to ${member.role}`);
+    }
+    if (project_role !== undefined && member.project_role !== existingMember.project_role) {
+      activityParts.push(`project role to ${member.project_role || 'none'}`);
+    }
+
+    if (activityParts.length) {
+      await logBoardActivity(
+        id,
+        `Changed ${member.users.name} ${activityParts.join(' and ')}`,
+        req.user.id
+      );
+    }
 
     res.status(200).json(member);
   } catch (error) {

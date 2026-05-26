@@ -7,6 +7,7 @@ import { API_BASE_URL, apiFetch, type AuthUser } from "../../api";
 type Priority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 type PriorityFilter = "ALL" | Priority;
 type BoardRole = "OWNER" | "ADMIN" | "MEMBER";
+type EditableBoardRole = "ADMIN" | "MEMBER";
 type AssigneeFilter = "ALL" | "UNASSIGNED" | string;
 type DueFilter = "ALL" | "OVERDUE" | "DUE_SOON" | "NO_DUE";
 
@@ -95,6 +96,7 @@ type TaskUpdate = {
 };
 
 const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+const editableBoardRoles: EditableBoardRole[] = ["ADMIN", "MEMBER"];
 const projectRoles = [
   "Product Manager",
   "Project Manager",
@@ -663,6 +665,9 @@ export function BoardWorkspace({
   const [settingsDescription, setSettingsDescription] = useState("");
   const [memberName, setMemberName] = useState("");
   const [memberProjectRole, setMemberProjectRole] = useState("");
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [editingMemberRole, setEditingMemberRole] = useState<EditableBoardRole>("MEMBER");
+  const [editingMemberProjectRole, setEditingMemberProjectRole] = useState("");
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingColumnTitle, setEditingColumnTitle] = useState("");
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
@@ -670,6 +675,7 @@ export function BoardWorkspace({
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isSavingColumn, setIsSavingColumn] = useState(false);
   const [isAddingMember, setIsAddingMember] = useState(false);
+  const [isSavingMember, setIsSavingMember] = useState(false);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [savingColumnId, setSavingColumnId] = useState<string | null>(null);
   const [savingTaskColumnId, setSavingTaskColumnId] = useState<string | null>(null);
@@ -685,6 +691,7 @@ export function BoardWorkspace({
   const currentRole = currentMember?.role || null;
   const canManageBoard = currentRole === "OWNER" || currentRole === "ADMIN";
   const canManageMembers = canManageBoard;
+  const canEditMemberRoles = currentRole === "OWNER";
   const canManageColumns = canManageBoard;
 
   const isFiltering =
@@ -984,6 +991,49 @@ export function BoardWorkspace({
       setError("Could not add member. Try again.");
     } finally {
       setIsAddingMember(false);
+    }
+  };
+
+  const openEditMember = (member: BoardMember) => {
+    if (!canEditMemberRoles || member.role === "OWNER") return;
+
+    setEditingMemberId(member.user_id);
+    setEditingMemberRole(member.role === "ADMIN" ? "ADMIN" : "MEMBER");
+    setEditingMemberProjectRole(member.project_role || "");
+    setError("");
+  };
+
+  const closeEditMember = () => {
+    setEditingMemberId(null);
+    setEditingMemberRole("MEMBER");
+    setEditingMemberProjectRole("");
+  };
+
+  const handleSaveMember = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editingMemberId || !canEditMemberRoles) return;
+
+    setIsSavingMember(true);
+    setError("");
+
+    try {
+      const res = await apiFetch(`/api/boards/${id}/members/${editingMemberId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: editingMemberRole,
+          project_role: editingMemberProjectRole.trim() || null,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Update member failed");
+
+      await fetchBoardData();
+      closeEditMember();
+    } catch {
+      setError("Could not update member. Only owners can change member roles.");
+    } finally {
+      setIsSavingMember(false);
     }
   };
 
@@ -1620,20 +1670,83 @@ export function BoardWorkspace({
                       <p className={`text-[10px] font-medium ${embedded ? "text-slate-500" : "text-slate-500"}`}>
                         {member.project_role || member.role}
                       </p>
+                      {member.project_role && (
+                        <p className="text-[10px] font-semibold text-slate-400">
+                          {member.role}
+                        </p>
+                      )}
                     </div>
-                    {canManageMembers && member.role !== "OWNER" && (
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveMember(member.user_id)}
-                        disabled={removingMemberId === member.user_id}
-                        className="rounded px-1.5 py-1 text-[10px] font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
-                      >
-                        Remove
-                      </button>
+                    {member.role !== "OWNER" && (
+                      <div className="ml-auto flex gap-1">
+                        {canEditMemberRoles && (
+                          <button
+                            type="button"
+                            onClick={() => openEditMember(member)}
+                            className="rounded px-1.5 py-1 text-[10px] font-semibold text-blue-600 hover:bg-blue-50"
+                          >
+                            Edit
+                          </button>
+                        )}
+                        {canManageMembers && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMember(member.user_id)}
+                            disabled={removingMemberId === member.user_id}
+                            className="rounded px-1.5 py-1 text-[10px] font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 ))}
               </div>
+
+              {editingMemberId && (
+                <form
+                  onSubmit={handleSaveMember}
+                  className="mb-2 grid gap-2 rounded-md border border-blue-200 bg-blue-50 p-2 sm:grid-cols-[160px_1fr_auto_auto]"
+                >
+                  <select
+                    value={editingMemberRole}
+                    onChange={(event) => setEditingMemberRole(event.target.value as EditableBoardRole)}
+                    className={`${inputClass} h-9 px-2`}
+                  >
+                    {editableBoardRoles.map((role) => (
+                      <option key={role} value={role}>
+                        {role}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={editingMemberProjectRole}
+                    onChange={(event) => setEditingMemberProjectRole(event.target.value)}
+                    className={`${inputClass} h-9 px-2`}
+                  >
+                    <option value="">No project role</option>
+                    {projectRoles.map((role) => (
+                      <option key={role} value={role}>
+                        {role}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={closeEditMember}
+                    className="h-9 rounded-md px-3 text-sm font-medium text-slate-600 hover:bg-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingMember}
+                    className="h-9 rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isSavingMember ? "Saving" : "Save"}
+                  </button>
+                </form>
+              )}
 
               {canManageMembers ? (
                 <form onSubmit={handleAddMember} className="grid gap-2 sm:grid-cols-[1fr_1fr_140px]">
