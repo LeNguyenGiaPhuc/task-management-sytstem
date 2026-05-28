@@ -5,6 +5,7 @@ import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-p
 import { API_BASE_URL, apiFetch, type AuthUser } from "../../api";
 
 type Priority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+type TaskType = "TASK" | "BUG" | "STORY" | "EPIC";
 type PriorityFilter = "ALL" | Priority;
 type BoardRole = "OWNER" | "ADMIN" | "MEMBER";
 type EditableBoardRole = "ADMIN" | "MEMBER";
@@ -62,6 +63,7 @@ type Task = {
   column_id?: string;
   title: string;
   description?: string | null;
+  task_type?: TaskType | null;
   priority?: Priority | null;
   assignee_id?: string | null;
   due_date?: string | null;
@@ -90,12 +92,14 @@ type CreatedColumn = Omit<Column, "tasks">;
 type TaskUpdate = {
   title: string;
   description: string | null;
+  task_type: TaskType;
   priority: Priority;
   assignee_id: string | null;
   due_date: string | null;
 };
 
 const priorities: Priority[] = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+const taskTypes: TaskType[] = ["TASK", "BUG", "STORY", "EPIC"];
 const editableBoardRoles: EditableBoardRole[] = ["ADMIN", "MEMBER"];
 const projectRoles = [
   "Product Manager",
@@ -191,6 +195,13 @@ function getPriorityClass(priority?: Priority | null) {
   return "bg-blue-50 text-blue-700 ring-blue-200";
 }
 
+function getTaskTypeClass(taskType?: TaskType | null) {
+  if (taskType === "BUG") return "bg-red-50 text-red-700 ring-red-200";
+  if (taskType === "STORY") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (taskType === "EPIC") return "bg-violet-50 text-violet-700 ring-violet-200";
+  return "bg-slate-100 text-slate-700 ring-slate-200";
+}
+
 function getDueState(dueDate?: string | null): DueFilter | "NORMAL" {
   if (!dueDate) return "NO_DUE";
 
@@ -249,6 +260,7 @@ function TaskDetailModal({
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || "");
+  const [taskType, setTaskType] = useState<TaskType>(task.task_type || "TASK");
   const [priority, setPriority] = useState<Priority>(task.priority || "MEDIUM");
   const [assigneeId, setAssigneeId] = useState(task.assignee_id || "");
   const [dueDate, setDueDate] = useState(toDateInputValue(task.due_date));
@@ -273,6 +285,7 @@ function TaskDetailModal({
       await onSave({
         title: title.trim(),
         description: description.trim() || null,
+        task_type: taskType,
         priority,
         assignee_id: assigneeId || null,
         due_date: dueDate || null,
@@ -379,7 +392,22 @@ function TaskDetailModal({
             />
           </label>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+            <label>
+              <span className="mb-1 block text-sm font-medium text-slate-700">Type</span>
+              <select
+                value={taskType}
+                onChange={(event) => setTaskType(event.target.value as TaskType)}
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              >
+                {taskTypes.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <label>
               <span className="mb-1 block text-sm font-medium text-slate-700">Priority</span>
               <select
@@ -1123,6 +1151,7 @@ export function BoardWorkspace({
         body: JSON.stringify({
           column_id: columnId,
           title,
+          task_type: "TASK",
           priority: "MEDIUM",
         }),
       });
@@ -1196,6 +1225,7 @@ export function BoardWorkspace({
         column_id: column.id,
         title: `${selectedTask.title} Copy`,
         description: selectedTask.description || null,
+        task_type: selectedTask.task_type || "TASK",
         priority: selectedTask.priority || "MEDIUM",
         assignee_id: selectedTask.assignee_id || null,
         due_date: selectedTask.due_date || null,
@@ -1892,6 +1922,13 @@ export function BoardWorkspace({
                                     >
                                       <p className={`text-sm font-medium leading-5 ${embedded ? "text-slate-900" : "text-slate-900"}`}>{task.title}</p>
                                       <div className="mt-3 flex flex-wrap items-center gap-2">
+                                        <span
+                                          className={`rounded px-2 py-0.5 text-[10px] font-bold ring-1 ${getTaskTypeClass(
+                                            task.task_type
+                                          )}`}
+                                        >
+                                          {task.task_type || "TASK"}
+                                        </span>
                                         <span
                                           className={`rounded px-2 py-0.5 text-[10px] font-bold ring-1 ${getPriorityClass(
                                             task.priority
