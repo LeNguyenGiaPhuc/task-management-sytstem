@@ -86,6 +86,7 @@ model tasks {
   column_id        String             @db.Uuid
   title            String             @db.VarChar(255)
   description      String?
+  task_type        String?            @default("TASK") @db.VarChar(20)
   priority         task_priority?     @default(MEDIUM)
   assignee_id      String?            @db.Uuid
   due_date         DateTime?          @db.Timestamptz(6)
