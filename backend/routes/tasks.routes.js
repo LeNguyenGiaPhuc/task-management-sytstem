@@ -28,6 +28,30 @@ const upload = multer({
 
 router.use(requireAuth);
 
+const taskTypes = ['TASK', 'BUG', 'STORY', 'EPIC'];
+let ensuredTaskTypeColumn = false;
+
+async function ensureTaskTypeColumn() {
+  if (ensuredTaskTypeColumn) return;
+
+  await prisma.$executeRawUnsafe(`
+    ALTER TABLE tasks
+    ADD COLUMN IF NOT EXISTS task_type VARCHAR(20) DEFAULT 'TASK';
+  `);
+
+  ensuredTaskTypeColumn = true;
+}
+
+router.use(async (req, res, next) => {
+  try {
+    await ensureTaskTypeColumn();
+    next();
+  } catch (error) {
+    console.error('Ensure task_type column failed:', error);
+    res.status(500).json({ error: 'Server error while preparing tasks' });
+  }
+});
+
 const taskInclude = {
   users: {
     select: {
@@ -82,10 +106,15 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { column_id, title, description, priority, assignee_id, due_date } = req.body;
+    const { column_id, title, description, task_type, priority, assignee_id, due_date } = req.body;
 
     if (!column_id || !title || !title.trim()) {
       return res.status(400).json({ error: 'Missing column_id or title' });
+    }
+
+    const taskType = task_type || 'TASK';
+    if (!taskTypes.includes(taskType)) {
+      return res.status(400).json({ error: 'Invalid task type' });
     }
 
     const column = await prisma.columns.findUnique({
@@ -111,6 +140,7 @@ router.post('/', async (req, res) => {
         column_id,
         title: title.trim(),
         description: cleanText(description),
+        task_type: taskType,
         priority: priority || 'MEDIUM',
         assignee_id: assignee_id || null,
         due_date: due_date ? new Date(due_date) : null,
@@ -131,7 +161,7 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { column_id, title, description, priority, assignee_id, due_date, order } = req.body;
+    const { column_id, title, description, task_type, priority, assignee_id, due_date, order } = req.body;
     const data = {};
 
     if (column_id !== undefined) data.column_id = column_id;
@@ -141,6 +171,12 @@ router.put('/:id', async (req, res) => {
       data.title = title.trim();
     }
     if (description !== undefined) data.description = cleanText(description);
+    if (task_type !== undefined) {
+      if (!taskTypes.includes(task_type)) {
+        return res.status(400).json({ error: 'Invalid task type' });
+      }
+      data.task_type = task_type;
+    }
     if (priority !== undefined) data.priority = priority;
     if (assignee_id !== undefined) data.assignee_id = assignee_id || null;
     if (due_date !== undefined) data.due_date = due_date ? new Date(due_date) : null;
@@ -194,6 +230,8 @@ router.put('/:id', async (req, res) => {
         : `Unassigned task ${updatedTask.title}`;
     } else if (priority !== undefined && priority !== existingTask.priority) {
       actionText = `Changed ${updatedTask.title} priority to ${updatedTask.priority}`;
+    } else if (task_type !== undefined && task_type !== existingTask.task_type) {
+      actionText = `Changed ${updatedTask.title} type to ${updatedTask.task_type}`;
     }
 
     await logBoardActivity(existingTask.columns.board_id, actionText, req.user.id);
