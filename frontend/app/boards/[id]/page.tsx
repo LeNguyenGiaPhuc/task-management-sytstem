@@ -11,6 +11,7 @@ type BoardRole = "OWNER" | "ADMIN" | "MEMBER";
 type EditableBoardRole = "ADMIN" | "MEMBER";
 type AssigneeFilter = "ALL" | "UNASSIGNED" | string;
 type DueFilter = "ALL" | "OVERDUE" | "DUE_SOON" | "NO_DUE";
+type BoardView = "BOARD" | "REPORTS";
 
 type User = {
   id: string;
@@ -684,6 +685,7 @@ export function BoardWorkspace({
   const [columnTitle, setColumnTitle] = useState("");
   const [taskTitles, setTaskTitles] = useState<Record<string, string>>({});
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<BoardView>("BOARD");
   const [query, setQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("ALL");
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("ALL");
@@ -753,6 +755,39 @@ export function BoardWorkspace({
   const checklistRate = totalChecklistItems
     ? Math.round((completedChecklistItems / totalChecklistItems) * 100)
     : 0;
+  const memberReport = boardMembers
+    .map((member) => {
+      const assignedTasks = allTasks.filter((task) => task.assignee_id === member.user_id);
+      return {
+        id: member.user_id,
+        name: member.users.name,
+        projectRole: member.project_role || member.role || "MEMBER",
+        count: assignedTasks.length,
+        urgentCount: assignedTasks.filter((task) => task.priority === "URGENT").length,
+        overdueCount: assignedTasks.filter((task) => getDueState(task.due_date) === "OVERDUE").length,
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+  const priorityReport = priorities.map((priority) => ({
+    label: priority,
+    count: allTasks.filter((task) => task.priority === priority).length,
+  }));
+  const typeReport = taskTypes.map((taskType) => ({
+    label: taskType,
+    count: allTasks.filter((task) => (task.task_type || "TASK") === taskType).length,
+  }));
+  const columnReport = columns.map((column) => ({
+    id: column.id,
+    title: column.title,
+    count: column.tasks.length,
+    percent: totalTasks ? Math.round((column.tasks.length / totalTasks) * 100) : 0,
+  }));
+  const overdueTaskList = allTasks
+    .filter((task) => getDueState(task.due_date) === "OVERDUE")
+    .sort(
+      (a, b) =>
+        new Date(a.due_date || 0).getTime() - new Date(b.due_date || 0).getTime()
+    );
   const boardHealth =
     overdueTasks > 0
       ? { label: "Needs attention", className: "bg-red-50 text-red-700 ring-red-200" }
@@ -1522,6 +1557,7 @@ export function BoardWorkspace({
   const addColumnClass = embedded
     ? "min-w-[300px] self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
     : "min-w-[300px] self-start rounded-lg border border-slate-200 bg-white p-3 shadow-sm";
+  const reportPanelClass = "rounded-lg border border-slate-200 bg-white p-4 shadow-sm";
   const summaryCards = [
     {
       label: "Open tasks",
@@ -1648,6 +1684,26 @@ export function BoardWorkspace({
               {error}
             </div>
           )}
+
+          <div className="flex gap-2 border-b border-slate-200">
+            {[
+              { key: "BOARD", label: "Board" },
+              { key: "REPORTS", label: "Reports" },
+            ].map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setActiveView(item.key as BoardView)}
+                className={`border-b-2 px-1 pb-2 text-sm font-semibold transition ${
+                  activeView === item.key
+                    ? "border-blue-600 text-blue-600"
+                    : "border-transparent text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
 
           <section className="rounded-lg border border-slate-200 bg-white p-2">
             <div className="mb-2 flex items-center justify-between gap-2">
@@ -1816,6 +1872,7 @@ export function BoardWorkspace({
         </div>
       </header>
 
+      {activeView === "BOARD" ? (
       <DragDropContext onDragEnd={onDragEnd}>
         <main className={`${embedded ? "w-full" : "mx-auto max-w-7xl"} overflow-x-auto px-6 py-4`}>
           <Droppable droppableId="board-columns" direction="horizontal" type="COLUMN">
@@ -2027,6 +2084,195 @@ export function BoardWorkspace({
           </Droppable>
         </main>
       </DragDropContext>
+      ) : (
+        <main className={`${embedded ? "w-full" : "mx-auto max-w-7xl"} px-6 py-4`}>
+          <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+            <section className={reportPanelClass}>
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">Work overview</h2>
+                  <p className="text-sm text-slate-500">
+                    Distribution by column and current completion status.
+                  </p>
+                </div>
+                <span className={`rounded px-2 py-1 text-xs font-bold ring-1 ${boardHealth.className}`}>
+                  {boardHealth.label}
+                </span>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className={innerCardClass}>
+                  <p className="text-xs font-medium text-slate-500">Total tasks</p>
+                  <p className="mt-2 text-2xl font-bold text-slate-900">{totalTasks}</p>
+                  <p className="mt-1 text-xs text-slate-500">{openTasks} open / {doneTasks} done</p>
+                </div>
+                <div className={innerCardClass}>
+                  <p className="text-xs font-medium text-slate-500">Completion</p>
+                  <p className="mt-2 text-2xl font-bold text-slate-900">{completionRate}%</p>
+                  <p className="mt-1 text-xs text-slate-500">{checklistRate}% checklist progress</p>
+                </div>
+                <div className={innerCardClass}>
+                  <p className="text-xs font-medium text-slate-500">Risk</p>
+                  <p className={`mt-2 text-2xl font-bold ${overdueTasks > 0 ? "text-red-600" : "text-slate-900"}`}>
+                    {overdueTasks}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">{dueSoonTasks} due soon</p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3">
+                {columnReport.map((column) => (
+                  <div key={column.id}>
+                    <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+                      <span className="font-semibold uppercase tracking-wide text-slate-600">
+                        {column.title}
+                      </span>
+                      <span className="text-slate-500">
+                        {column.count} tasks / {column.percent}%
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className="h-full rounded-full bg-blue-600"
+                        style={{ width: `${column.percent}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className={reportPanelClass}>
+              <h2 className="text-base font-bold text-slate-900">Member workload</h2>
+              <p className="mb-4 text-sm text-slate-500">
+                Assigned work and risk by member.
+              </p>
+              <div className="grid gap-2">
+                {memberReport.length > 0 ? (
+                  memberReport.map((member) => {
+                    const percent = totalTasks ? Math.round((member.count / totalTasks) * 100) : 0;
+                    return (
+                      <div key={member.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">{member.name}</p>
+                            <p className="truncate text-xs text-slate-500">{member.projectRole}</p>
+                          </div>
+                          <p className="shrink-0 text-sm font-bold text-slate-900">{member.count}</p>
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                          <div className="h-full rounded-full bg-slate-700" style={{ width: `${percent}%` }} />
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {member.urgentCount} urgent / {member.overdueCount} overdue
+                        </p>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-md border border-dashed border-slate-200 px-3 py-8 text-center text-sm text-slate-500">
+                    No members yet
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            <section className={reportPanelClass}>
+              <h2 className="text-base font-bold text-slate-900">Priority breakdown</h2>
+              <div className="mt-4 grid gap-3">
+                {priorityReport.map((item) => {
+                  const percent = totalTasks ? Math.round((item.count / totalTasks) * 100) : 0;
+                  return (
+                    <div key={item.label}>
+                      <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+                        <span className={`rounded px-2 py-0.5 font-bold ring-1 ${getPriorityClass(item.label)}`}>
+                          {item.label}
+                        </span>
+                        <span className="text-slate-500">{item.count} tasks</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div className="h-full rounded-full bg-slate-700" style={{ width: `${percent}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className={reportPanelClass}>
+              <h2 className="text-base font-bold text-slate-900">Type breakdown</h2>
+              <div className="mt-4 grid gap-3">
+                {typeReport.map((item) => {
+                  const percent = totalTasks ? Math.round((item.count / totalTasks) * 100) : 0;
+                  return (
+                    <div key={item.label}>
+                      <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+                        <span className={`rounded px-2 py-0.5 font-bold ring-1 ${getTaskTypeClass(item.label)}`}>
+                          {item.label}
+                        </span>
+                        <span className="text-slate-500">{item.count} tasks</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div className="h-full rounded-full bg-blue-600" style={{ width: `${percent}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+
+          <section className={`${reportPanelClass} mt-4`}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">Overdue tasks</h2>
+                <p className="text-sm text-slate-500">Tasks past their due date.</p>
+              </div>
+              <span className="rounded bg-red-50 px-2 py-1 text-xs font-bold text-red-700 ring-1 ring-red-200">
+                {overdueTaskList.length}
+              </span>
+            </div>
+
+            {overdueTaskList.length > 0 ? (
+              <div className="grid gap-2">
+                {overdueTaskList.slice(0, 8).map((task) => (
+                  <button
+                    key={task.id}
+                    type="button"
+                    onClick={() => {
+                      setTaskComments([]);
+                      setTaskAttachments([]);
+                      setSelectedTaskId(task.id);
+                    }}
+                    className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left hover:bg-white"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-slate-900">{task.title}</span>
+                      <span className="mt-1 flex flex-wrap gap-2">
+                        <span className={`rounded px-2 py-0.5 text-[10px] font-bold ring-1 ${getTaskTypeClass(task.task_type)}`}>
+                          {task.task_type || "TASK"}
+                        </span>
+                        <span className={`rounded px-2 py-0.5 text-[10px] font-bold ring-1 ${getPriorityClass(task.priority)}`}>
+                          {task.priority || "MEDIUM"}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs font-semibold text-red-600">
+                      Due {toDateInputValue(task.due_date)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed border-slate-200 px-3 py-8 text-center text-sm text-slate-500">
+                No overdue tasks
+              </div>
+            )}
+          </section>
+        </main>
+      )}
 
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
